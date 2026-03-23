@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hotel Price Tracker</title>
+<style>
+  :root {
+    --bg: #e8f8ff;
+    --card: rgba(255, 255, 255, 0.92);
+    --line: #cde6f7;
+    --muted: #466174;
+    --text: #0f172a;
+    --primary: #06b6d4;
+    --good: #0b7a4a;
+    --bad: #c81e1e;
+    --shadow: 0 18px 45px rgba(2, 132, 199, 0.16);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, sans-serif;
+    background:
+      linear-gradient(rgba(233, 250, 255, 0.82), rgba(233, 250, 255, 0.92)),
+      url("https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1800&q=80") center/cover fixed no-repeat;
+    color: var(--text);
+    padding: 16px;
+    max-width: 860px;
+    margin-inline: auto;
+    min-height: 100vh;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    background:
+      radial-gradient(circle at 10% 0%, rgba(14, 165, 233, 0.24) 0, transparent 38%),
+      radial-gradient(circle at 85% 15%, rgba(20, 184, 166, 0.18) 0, transparent 42%),
+      linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.34));
+  }
+  .header, .panel, .tracker, .auth-card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; backdrop-filter: blur(6px); }
+  .header { padding: 18px; margin-bottom: 14px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; box-shadow: var(--shadow); }
+  .auth-card { padding: 18px; margin-bottom: 14px; box-shadow: var(--shadow); }
+  .auth-card h2 { margin: 0 0 10px; font-size: 18px; }
+  .auth-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px; }
+  .auth-row input { flex: 1; min-width: 160px; }
+  .user-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 14px; }
+  .user-bar .email { color: var(--muted); }
+  #app-main { display: none; }
+  #app-main.visible { display: block; }
+  .title { font-size: 22px; font-weight: 800; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .stats { display: flex; gap: 10px; }
+  .stat { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; text-align: center; min-width: 80px; }
+  .stat .n { font-size: 20px; font-weight: 800; }
+  .stat .l { font-size: 11px; color: var(--muted); }
+
+  .toggle-btn {
+    width: 100%;
+    border: 0;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #06b6d4 0%, #38bdf8 52%, #34d399 110%);
+    color: #ffffff;
+    font-weight: 700;
+    padding: 12px;
+    cursor: pointer;
+    margin-bottom: 12px;
+    box-shadow: 0 14px 40px rgba(14,165,233,0.22);
+    transition: transform .12s ease, filter .12s ease;
+  }
+  .toggle-btn:hover { transform: translateY(-1px); filter: brightness(1.02); }
+
+  .panel { padding: 14px; margin-bottom: 14px; display: none; }
+  .panel { box-shadow: var(--shadow); backdrop-filter: blur(8px); }
+  .panel.open { display: block; }
+  .section { margin-top: 14px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: #8bb1ff; font-weight: 700; }
+
+  label { display: block; font-size: 12px; color: var(--muted); margin-top: 10px; margin-bottom: 4px; }
+  input, select {
+    width: 100%;
+    border: 1px solid var(--line);
+    background: #ffffff;
+    color: var(--text);
+    border-radius: 10px;
+    padding: 10px;
+    font-size: 14px;
+  }
+
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+  .chip-btn {
+    flex: 1;
+    min-width: 88px;
+    border: 1px solid var(--line);
+    background: #ffffff;
+    color: var(--muted);
+    border-radius: 10px;
+    padding: 10px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform .12s ease, border-color .12s ease, background .12s ease;
+  }
+  .chip-btn:hover { transform: translateY(-1px); border-color: rgba(14,165,233,0.55); }
+  .chip-btn.active { border-color: var(--primary); color: #0b4f71; background: #e8f8ff; }
+
+  .check-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
+  .check { border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; align-items: center; gap: 8px; }
+  .check input { width: auto; }
+
+  .alt-row { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; margin-top: 8px; }
+  .btn { border: 0; border-radius: 10px; padding: 9px 12px; font-weight: 700; cursor: pointer; }
+  .btn-primary { background: var(--primary); color: white; }
+  .btn-ghost { background: #eaf3ff; color: #0b4f71; }
+  .btn-danger { background: #ffe9e9; color: #8a1c1c; border: 1px solid #ffd1d1; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .btn { transition: transform .12s ease, filter .12s ease; }
+  .btn:hover { transform: translateY(-1px); filter: brightness(1.02); }
+
+  .error { margin-top: 10px; display: none; background: #3b1d23; border: 1px solid #8e3d4b; padding: 10px; border-radius: 10px; color: #ffb3be; }
+
+  .tracker { padding: 14px; margin-bottom: 10px; }
+  .tracker-top { display: flex; justify-content: space-between; gap: 8px; }
+  .price { font-size: 24px; font-weight: 800; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+  .tag { font-size: 11px; border: 1px solid transparent; border-radius: 999px; padding: 2px 10px; font-weight: 700; }
+  .tag-meal { background: #e8f8ff; border-color: #bfe9ff; color: #075985; }
+  .tag-reserve { background: #fff3e6; border-color: #ffd9b3; color: #9a3412; }
+  .tag-club { background: #ecfff3; border-color: #bff3d0; color: #0f766e; }
+  .tag-threshold { background: #f3e8ff; border-color: #e7d2fe; color: #6d28d9; }
+  .pkg-wrap { margin-top: 8px; display: none; }
+  .pkg { border: 1px solid #d9e7f7; border-radius: 10px; padding: 8px; margin-bottom: 6px; background: #f7fbff; }
+
+  .status {
+    margin-top: 10px;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 18px;
+  }
+
+  @media (max-width: 640px) {
+    .row2, .check-grid, .alt-row { grid-template-columns: 1fr; }
+    .tracker-top { flex-direction: column; }
+  }
+</style>
+</head>
+<body>
+  <div id="auth-section" class="auth-card">
+    <h2 id="auth-title">Sign in</h2>
+    <div id="auth-forms">
+      <label>Email</label>
+      <input id="auth-email" type="email" autocomplete="username" placeholder="you@example.com" />
+      <label>Password (min 8 characters)</label>
+      <input id="auth-password" type="password" autocomplete="current-password" placeholder="••••••••" />
+      <div class="auth-row">
+        <button class="btn btn-primary" type="button" onclick="doLogin()">Sign in</button>
+        <button class="btn btn-ghost" type="button" onclick="doRegister()">Create account</button>
+      </div>
+      <div id="auth-error" class="error" style="margin-top:12px"></div>
+    </div>
+    <div id="user-panel" class="user-bar" style="display:none">
+      <span class="email">Signed in as <strong id="user-email"></strong></span>
+      <button class="btn btn-ghost" type="button" onclick="doLogout()">Sign out</button>
+    </div>
+  </div>
+
+  <div id="app-main">
+  <div class="header">
+    <div>
+      <div class="title">Hotel Price Tracker</div>
+      <div class="sub">Set once, monitor automatically. Price alerts are sent to your email.</div>
+      <div class="sub"><strong>Officially supported networks:</strong> Astral, Dan, Fattal. Other hotel websites are best-effort only.</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n" id="stat-count">0</div><div class="l">Trackers</div></div>
+      <div class="stat"><div class="n" id="stat-drops" style="color:var(--good)">0</div><div class="l">Cheaper Now</div></div>
+    </div>
+  </div>
+
+  <button id="toggle-btn" class="toggle-btn" onclick="toggleForm()">+ Add Hotel</button>
+
+  <div id="form-wrap" class="panel">
+    <input type="hidden" id="f-edit-id" />
+
+    <div class="section">Basics</div>
+    <label>Hotel Name</label>
+    <input id="f-label" placeholder="Example: Astral Maris May stay" />
+
+    <label>Hotel/Room URL</label>
+    <div class="muted" style="margin-top:-2px;margin-bottom:6px;font-size:12px">
+      Saved in the database with this tracker. Use a link that includes your dates and shows a visible price.
+    </div>
+    <input id="f-url" placeholder="https://..." />
+
+    <label>Notes</label>
+    <input id="f-notes" placeholder="2 adults, deluxe room" />
+
+    <div class="section">Currency</div>
+    <div class="chips" id="currency-group">
+      <button type="button" class="chip-btn active" onclick="setCur('₪', this)">₪ ILS</button>
+      <button type="button" class="chip-btn" onclick="setCur('$', this)">$ USD</button>
+      <button type="button" class="chip-btn" onclick="setCur('€', this)">€ EUR</button>
+      <button type="button" class="chip-btn" onclick="setCur('£', this)">£ GBP</button>
+    </div>
+    <input type="hidden" id="f-cur" value="₪" />
+
+    <div class="section">Booking</div>
+    <label>Price paid (optional)</label>
+    <input id="f-paid" type="number" min="0" placeholder="What you already paid" />
+
+    <div class="section">Matching Rules</div>
+    <label>Meal Plan</label>
+    <div class="chips" id="meal-group">
+      <button type="button" class="chip-btn active" onclick="setMeal('none', this)">No Preference</button>
+      <button type="button" class="chip-btn" onclick="setMeal('breakfast', this)">Breakfast</button>
+      <button type="button" class="chip-btn" onclick="setMeal('half_board', this)">Half Board</button>
+      <button type="button" class="chip-btn" onclick="setMeal('full_board', this)">Full Board</button>
+    </div>
+    <input type="hidden" id="f-meal" value="none" />
+
+    <label>Alert Direction</label>
+    <select id="f-dir">
+      <option value="down">Only when price drops</option>
+      <option value="any">Any change</option>
+      <option value="up">Only when price rises</option>
+    </select>
+
+    <div class="check-grid">
+      <label class="check"><input id="f-reserve-duty" type="checkbox" /> Reservation Type/Status (Reserve duty / Miluim)</label>
+      <label class="check"><input id="f-club-membership" type="checkbox" /> Is there a club membership?</label>
+    </div>
+
+    <label>Minimum Price Drop % for Alert</label>
+    <input id="f-pct" type="number" min="0" max="100" value="0" />
+
+    <div id="form-error" class="error"></div>
+
+    <div class="actions">
+      <button class="btn btn-primary" type="button" onclick="saveTracker()">Save Tracker</button>
+      <button class="btn btn-ghost" type="button" onclick="cancelForm()">Cancel</button>
+    </div>
+  </div>
+
+  <div id="trackers"></div>
+  </div><!-- /#app-main -->
+
+<script>
+const fetchOpts = { credentials: 'include' };
+
+function showAuthError(msg) {
+  const el = document.getElementById('auth-error');
+  el.textContent = msg || '';
+  el.style.display = msg ? 'block' : 'none';
+}
+
+async function refreshSession() {
+  const r = await fetch('/api/auth/me', fetchOpts);
+  const data = await r.json();
+  const user = data.user;
+  const authForms = document.getElementById('auth-forms');
+  const userPanel = document.getElementById('user-panel');
+  const appMain = document.getElementById('app-main');
+  if (user && user.email) {
+    authForms.style.display = 'none';
+    userPanel.style.display = 'flex';
+    document.getElementById('user-email').textContent = user.email;
+    appMain.classList.add('visible');
+    showAuthError('');
+    load();
+  } else {
+    authForms.style.display = 'block';
+    userPanel.style.display = 'none';
+    appMain.classList.remove('visible');
+  }
+}
+
+async function doLogin() {
+  showAuthError('');
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const r = await fetch('/api/auth/login', {
+    ...fetchOpts,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await r.json();
+  if (!r.ok) return showAuthError(data.error || 'Login failed.');
+  await refreshSession();
+}
+
+async function doRegister() {
+  showAuthError('');
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const r = await fetch('/api/auth/register', {
+    ...fetchOpts,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await r.json();
+  if (!r.ok) return showAuthError(data.error || 'Could not register.');
+  await refreshSession();
+}
+
+async function doLogout() {
+  await fetch('/api/auth/logout', { ...fetchOpts, method: 'POST' });
+  document.getElementById('trackers').innerHTML = '';
+  await refreshSession();
+}
+
+let selectedCur = '₪';
+
+function setCur(value, btn) {
+  selectedCur = value;
+  document.getElementById('f-cur').value = value;
+  document.querySelectorAll('#currency-group .chip-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function setMeal(value, btn) {
+  document.getElementById('f-meal').value = value;
+  document.querySelectorAll('#meal-group .chip-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+
+function showFormError(message) {
+  const el = document.getElementById('form-error');
+  el.textContent = message;
+  el.style.display = 'block';
+}
+
+function clearFormError() {
+  const el = document.getElementById('form-error');
+  el.textContent = '';
+  el.style.display = 'none';
+}
+
+function toggleForm() {
+  const wrap = document.getElementById('form-wrap');
+  const btn = document.getElementById('toggle-btn');
+  const isOpen = !wrap.classList.contains('open');
+  wrap.classList.toggle('open', isOpen);
+  btn.textContent = isOpen ? '× Close Form' : '+ Add Hotel';
+  if (isOpen) resetForm();
+}
+
+function cancelForm() {
+  document.getElementById('form-wrap').classList.remove('open');
+  document.getElementById('toggle-btn').textContent = '+ Add Hotel';
+  resetForm();
+}
+
+function resetForm() {
+  [
+    'f-edit-id', 'f-label', 'f-url', 'f-notes', 'f-paid'
+  ].forEach(id => document.getElementById(id).value = '');
+
+  document.getElementById('f-dir').value = 'down';
+  document.getElementById('f-pct').value = '0';
+  document.getElementById('f-reserve-duty').checked = false;
+  document.getElementById('f-club-membership').checked = false;
+
+  setMeal('none', document.querySelector('#meal-group .chip-btn'));
+  setCur('₪', document.querySelector('#currency-group .chip-btn'));
+
+  clearFormError();
+}
+
+function editTracker(t) {
+  document.getElementById('form-wrap').classList.add('open');
+  document.getElementById('toggle-btn').textContent = '× Close Form';
+
+  document.getElementById('f-edit-id').value = t.id || '';
+  document.getElementById('f-label').value = t.label || '';
+  document.getElementById('f-url').value = t.url || '';
+  document.getElementById('f-notes').value = t.notes || '';
+  document.getElementById('f-paid').value = t.paid_price != null && t.paid_price !== '' ? t.paid_price : '';
+  document.getElementById('f-dir').value = t.alert_direction || 'down';
+  document.getElementById('f-pct').value = t.threshold_pct || 0;
+  document.getElementById('f-reserve-duty').checked = !!t.reserve_duty_only;
+  document.getElementById('f-club-membership').checked = !!t.club_membership_only;
+
+  const cur = t.currency || '₪';
+  const curBtn = Array.from(document.querySelectorAll('#currency-group .chip-btn')).find(b => b.textContent.includes(cur));
+  if (curBtn) setCur(cur, curBtn);
+
+  const meal = t.meal_plan || 'none';
+  const mealBtn = Array.from(document.querySelectorAll('#meal-group .chip-btn')).find(b => {
+    const txt = b.textContent.toLowerCase();
+    return (meal === 'none' && txt.includes('no preference')) ||
+           (meal === 'breakfast' && txt.includes('breakfast')) ||
+           (meal === 'half_board' && txt.includes('half board')) ||
+           (meal === 'full_board' && txt.includes('full board'));
+  });
+  if (mealBtn) setMeal(meal, mealBtn);
+
+  clearFormError();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function saveTracker() {
+  clearFormError();
+
+  const label = document.getElementById('f-label').value.trim();
+  const url = document.getElementById('f-url').value.trim();
+  const editId = document.getElementById('f-edit-id').value;
+
+  if (!label) return showFormError('Hotel name is required.');
+  if (!url) return showFormError('URL is required.');
+
+  const body = {
+    label,
+    url,
+    notes: document.getElementById('f-notes').value.trim(),
+    currency: document.getElementById('f-cur').value || '₪',
+    paid_price: parseFloat(document.getElementById('f-paid').value) || null,
+    meal_plan: document.getElementById('f-meal').value || 'none',
+    reserve_duty_only: document.getElementById('f-reserve-duty').checked,
+    club_membership_only: document.getElementById('f-club-membership').checked,
+    alert_direction: document.getElementById('f-dir').value || 'down',
+    threshold_pct: parseFloat(document.getElementById('f-pct').value) || 0,
+    active: 1,
+  };
+
+  if (editId) body.id = editId;
+
+  const response = await fetch('/api/trackers', {
+    ...fetchOpts,
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json();
+  if (!response.ok) return showFormError(data.error || 'Could not save tracker.');
+
+  cancelForm();
+  load();
+}
+
+async function checkNow(id, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Checking...';
+
+  const status = document.getElementById(`status-${id}`);
+  status.textContent = '';
+  status.style.color = 'var(--muted)';
+  const pkgWrap = document.getElementById(`packages-${id}`);
+
+  try {
+    const response = await fetch(`/api/trackers/${id}/check`, { ...fetchOpts, method: 'POST' });
+    const data = await response.json();
+
+    if (!response.ok || data.error) {
+      status.textContent = data.error || 'Check failed.';
+      status.style.color = 'var(--bad)';
+    } else {
+      const prev = data.previous_price;
+      const cur = data.currency || '₪';
+      if (prev == null) {
+        status.textContent = `Saved baseline: ${cur}${Number(data.price).toFixed(2)}`;
+        status.style.color = 'var(--muted)';
+      } else if (data.price < prev) {
+        status.textContent = `Price dropped: ${cur}${Number(prev).toFixed(2)} -> ${cur}${Number(data.price).toFixed(2)}`;
+        status.style.color = 'var(--good)';
+      } else if (data.price > prev) {
+        status.textContent = `Price increased: ${cur}${Number(prev).toFixed(2)} -> ${cur}${Number(data.price).toFixed(2)}`;
+        status.style.color = 'var(--bad)';
+      } else {
+        status.textContent = `No change: ${cur}${Number(data.price).toFixed(2)}`;
+        status.style.color = 'var(--muted)';
+      }
+
+      const n = data.notification || {};
+      if (n.eligible && n.email_sent) {
+        status.textContent += ' — Email alert sent.';
+      } else if (n.eligible && !n.email_sent) {
+        const skip = n.email_skip_reason === 'smtp_not_configured'
+          ? 'Email notifications are currently unavailable. Please try again later.'
+          : n.email_skip_reason === 'send_failed'
+            ? 'Email could not be sent right now. Please try again later.'
+            : (n.email_skip_reason === 'no_user_email' ? 'Email not sent: account has no email.' : 'Email not sent.');
+        status.textContent += ' — ' + skip;
+        status.style.color = 'var(--bad)';
+      } else if (n.blocker) {
+        const hints = {
+          no_baseline: 'No alert: set Price paid.',
+          not_below_baseline: 'No alert: live price is not below your reference.',
+          below_threshold: 'No alert: change is below your Minimum % for alert (try 0%).',
+          not_better_than_last_check: 'No alert: price is not better than your last saved check — clear history or wait for a lower price.',
+          no_previous_price: 'No alert yet: first check saves a baseline. Run Check again later or wait for the scheduler.',
+          no_change: 'No alert: price unchanged vs last check.',
+          not_rising: 'No alert: price did not rise vs last check (Alert direction = up).',
+        };
+        status.textContent += ' — ' + (hints[n.blocker] || ('No alert: ' + n.blocker));
+        status.style.color = 'var(--muted)';
+      }
+
+      if (data.packages && data.packages.length) {
+        pkgWrap.innerHTML = data.packages.map(p => `
+          <div class="pkg">
+            <div><strong>${p.room_name || 'Room option'}</strong></div>
+            <div>${data.currency || '₪'}${p.price}</div>
+            <div class="muted">
+              Breakfast: ${p.breakfast ? 'Yes' : 'No'} | Half board: ${p.half_board ? 'Yes' : 'No'} |
+              Full board: ${p.full_board ? 'Yes' : 'No'} |
+              Reserve duty: ${p.reserve_duty ? 'Yes' : 'No'}
+            </div>
+          </div>
+        `).join('');
+        pkgWrap.style.display = 'block';
+      }
+    }
+  } catch (err) {
+    status.textContent = 'Network error.';
+    status.style.color = 'var(--bad)';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Check Now';
+  load();
+}
+
+async function removeTracker(id) {
+  if (!confirm('Delete this tracker?')) return;
+  await fetch(`/api/trackers/${id}`, { ...fetchOpts, method: 'DELETE' });
+  load();
+}
+
+function mealLabel(mealPlan) {
+  return {
+    none: 'Meal: none',
+    breakfast: 'Meal: breakfast',
+    half_board: 'Meal: half board',
+    full_board: 'Meal: full board',
+  }[mealPlan || 'none'];
+}
+
+/** Baseline for “cheaper than” / stats: paid_price only. */
+function referenceBaseline(t) {
+  const paid = t.paid_price != null && t.paid_price !== '' ? Number(t.paid_price) : NaN;
+  if (!Number.isNaN(paid) && paid > 0) return paid;
+  return null;
+}
+
+async function load() {
+  const response = await fetch('/api/trackers', fetchOpts);
+  if (response.status === 401) {
+    await refreshSession();
+    return;
+  }
+  const trackers = await response.json();
+
+  document.getElementById('stat-count').textContent = trackers.length;
+  document.getElementById('stat-drops').textContent = trackers.filter(t => {
+    const ref = referenceBaseline(t);
+    return ref != null && t.current_price != null && Number(t.current_price) < ref;
+  }).length;
+
+  const container = document.getElementById('trackers');
+  if (!trackers.length) {
+    container.innerHTML = '<div class="tracker"><div class="muted">No hotels yet. Click "Add Hotel" to start.</div></div>';
+    return;
+  }
+
+  container.innerHTML = trackers.map(t => {
+    const currency = t.currency || '₪';
+    const diff = (t.current_price != null && t.previous_price != null) ? (t.current_price - t.previous_price) : null;
+    const color = diff == null ? 'var(--text)' : (diff < 0 ? 'var(--good)' : diff > 0 ? 'var(--bad)' : 'var(--text)');
+    const paidNum = t.paid_price != null && t.paid_price !== '' ? Number(t.paid_price) : null;
+    const refLine = (paidNum != null && paidNum > 0)
+      ? `<div class="muted">Paid ${currency}${paidNum.toFixed(2)}</div>`
+      : '';
+
+    return `
+      <div class="tracker">
+        <div class="tracker-top">
+          <div>
+            <div><strong>${t.label || 'Unnamed tracker'}</strong></div>
+            <div class="muted">${t.notes || ''}</div>
+            <div class="tags">
+              <span class="tag tag-meal">${mealLabel(t.meal_plan)}</span>
+              ${t.reserve_duty_only ? '<span class="tag tag-reserve">Reserve duty</span>' : ''}
+              ${t.threshold_pct > 0 ? `<span class="tag tag-threshold">Alert ≥ ${t.threshold_pct}%</span>` : ''}
+              ${t.club_membership_only ? '<span class="tag tag-club">Club price</span>' : ''}
+            </div>
+          </div>
+          <div style="text-align:right;min-width:120px">
+            <div class="price" style="color:${color}">${t.current_price != null ? `${currency}${Number(t.current_price).toFixed(2)}` : '—'}</div>
+            ${refLine}
+            ${diff != null ? `<div class="muted">${diff > 0 ? '+' : ''}${diff.toFixed(2)} vs prev</div>` : ''}
+          </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn btn-primary" onclick="checkNow('${t.id}', this)">Check Now</button>
+          <button class="btn btn-ghost" onclick='editTracker(${JSON.stringify(t).replace(/'/g, '&#39;')})'>Edit</button>
+          <button class="btn btn-danger" onclick="removeTracker('${t.id}')">Delete</button>
+          <a class="btn btn-ghost" href="${t.url}" target="_blank" rel="noreferrer">Open URL</a>
+        </div>
+
+        <div id="status-${t.id}" class="status"></div>
+        <div id="packages-${t.id}" class="pkg-wrap"></div>
+      </div>
+    `;
+  }).join('');
+}
+
+refreshSession();
+</script>
+</body>
+</html>

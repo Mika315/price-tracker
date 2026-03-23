@@ -1,0 +1,407 @@
+import logging
+import os
+import sys
+import uuid
+from datetime import datetime
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+
+from flask import Flask, jsonify, request, send_from_directory, session
+
+from auth_helpers import login_required, login_user, register_user
+from database import (
+    delete_tracker,
+    get_all_trackers,
+    get_last_price,
+    get_price_history,
+    get_tracker,
+    get_user_by_id,
+    init_db,
+    save_price,
+    upsert_tracker,
+)
+from notifier import get_smtp_status, send_price_alert, send_test_notification, send_test_notification_email
+from scheduler import (
+    _alert_baseline,
+    alert_kind_for_tracker,
+    explain_price_alert_blocker,
+    build_tracking_url,
+    check_all_trackers,
+    start_scheduler,
+)
+from scraper import scrape_price_and_packages
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[logging.StreamHandler(), logging.FileHandler("tracker.log")],
+)
+logger = logging.getLogger(__name__)
+
+app = Flask(__name__, static_folder="static")
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-change-me-set-SECRET_KEY-in-production")
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+if os.getenv("SESSION_COOKIE_SECURE", "").lower() in {"1", "true", "yes"}:
+    app.config["SESSION_COOKIE_SECURE"] = True
+
+
+def _user_id() -> str | None:
+    return session.get("user_id")
+
+
+def _public_user(u: dict | None) -> dict | None:
+    if not u:
+        return None
+    return {k: v for k, v in u.items() if k != "password_hash"}
+
+
+def _to_bool(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_dates(checkin: str | None, checkout: str | None):
+    if not checkin or not checkout:
+        return None
+    try:
+        in_date = datetime.strptime(checkin, "%Y-%m-%d")
+        out_date = datetime.strptime(checkout, "%Y-%m-%d")
+    except ValueError:
+        return "Invalid date format. Use YYYY-MM-DD."
+
+    if out_date <= in_date:
+        return "Departure date must be after arrival date."
+    return None
+
+
+def _normalize_tracker_payload(payload: dict, existing_id: str | None = None) -> dict:
+    data = dict(payload)
+
+    if existing_id:
+        data["id"] = existing_id
+    elif not data.get("id"):
+        data["id"] = str(uuid.uuid4())[:8]
+
+    data["label"] = (data.get("label") or "").strip()
+    data["url"] = (data.get("url") or "").strip()
+
+    meal_plan = (data.get("meal_plan") or "none").lower()
+    if meal_plan not in {"none", "breakfast", "half_board", "full_board"}:
+        meal_plan = "none"
+    data["meal_plan"] = meal_plan
+
+    data["require_free_cancel"] = 1 if _to_bool(data.get("require_free_cancel")) else 0
+    data["reserve_duty_only"] = 1 if _to_bool(data.get("reserve_duty_only")) else 0
+    data["club_membership_only"] = 1 if _to_bool(data.get("club_membership_only")) else 0
+    data["active"] = 1 if _to_bool(data.get("active", True)) else 0
+
+    data["room_keyword"] = (data.get("room_keyword") or "").strip()
+    data["currency"] = data.get("currency") or "₪"
+
+    try:
+        data["threshold_pct"] = float(data.get("threshold_pct") or 0)
+    except (TypeError, ValueError):
+        data["threshold_pct"] = 0
+
+    alert_direction = (data.get("alert_direction") or "down").lower()
+    if alert_direction not in {"any", "up", "down"}:
+        alert_direction = "down"
+    data["alert_direction"] = alert_direction
+
+    paid_price = data.get("paid_price")
+    try:
+        data["paid_price"] = float(paid_price) if paid_price not in (None, "") else None
+    except (TypeError, ValueError):
+        data["paid_price"] = None
+
+    if not isinstance(data.get("alternative_urls"), list):
+        data["alternative_urls"] = []
+
+    return data
+
+
+def _requirements_from_tracker(tracker: dict) -> dict:
+    return {
+        "meal_plan": tracker.get("meal_plan", "none"),
+        "free_cancel": _to_bool(tracker.get("require_free_cancel")),
+        "room_keyword": tracker.get("room_keyword", ""),
+        "reserve_duty_only": _to_bool(tracker.get("reserve_duty_only")),
+        "club_membership_only": _to_bool(tracker.get("club_membership_only")),
+    }
+
+
+# --- Auth ---
+
+
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register():
+    raw = request.json or {}
+    user, err = register_user(raw.get("email") or "", raw.get("password") or "")
+    if err:
+        return jsonify({"error": err}), 400
+    session["user_id"] = user["id"]
+    session.permanent = bool(os.getenv("PERMANENT_SESSION", "true").lower() in {"1", "true", "yes"})
+    return jsonify({"user": user})
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    raw = request.json or {}
+    user, err = login_user(raw.get("email") or "", raw.get("password") or "")
+    if err:
+        return jsonify({"error": err}), 401
+    session["user_id"] = user["id"]
+    session.permanent = bool(os.getenv("PERMANENT_SESSION", "true").lower() in {"1", "true", "yes"})
+    return jsonify({"user": user})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    session.clear()
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/auth/me", methods=["GET"])
+def auth_me():
+    uid = _user_id()
+    if not uid:
+        return jsonify({"user": None})
+    u = _public_user(get_user_by_id(uid))
+    return jsonify({"user": u})
+
+
+# --- App ---
+
+
+@app.route("/")
+def index():
+    return send_from_directory("static", "index.html")
+
+
+@app.route("/api/trackers", methods=["GET"])
+@login_required
+def list_trackers():
+    uid = _user_id()
+    result = []
+    for tracker in get_all_trackers(uid):
+        history = get_price_history(tracker["id"], limit=30)
+        tracker["current_price"] = history[0]["price"] if history else None
+        tracker["previous_price"] = history[1]["price"] if len(history) > 1 else None
+        tracker["history"] = history
+        result.append(tracker)
+    return jsonify(result)
+
+
+@app.route("/api/trackers", methods=["POST"])
+@login_required
+def add_tracker():
+    uid = _user_id()
+    raw = request.json or {}
+    data = _normalize_tracker_payload(raw)
+    data["user_id"] = uid
+
+    if not data.get("url"):
+        return jsonify({"error": "URL is required."}), 400
+
+    date_error = _validate_dates(data.get("checkin"), data.get("checkout"))
+    if date_error:
+        return jsonify({"error": date_error}), 400
+
+    try:
+        upsert_tracker(data)
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    logger.info("[Tracker] Saved: %s - %s", data["id"], data.get("label") or data["url"])
+    return jsonify({"status": "ok", "id": data["id"]})
+
+
+@app.route("/api/trackers/<tid>", methods=["PUT"])
+@login_required
+def update_tracker(tid):
+    uid = _user_id()
+    if not get_tracker(uid, tid):
+        return jsonify({"error": "Tracker not found."}), 404
+
+    raw = request.json or {}
+    data = _normalize_tracker_payload(raw, existing_id=tid)
+    data["user_id"] = uid
+
+    date_error = _validate_dates(data.get("checkin"), data.get("checkout"))
+    if date_error:
+        return jsonify({"error": date_error}), 400
+
+    try:
+        upsert_tracker(data)
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/trackers/<tid>", methods=["DELETE"])
+@login_required
+def remove_tracker(tid):
+    uid = _user_id()
+    if not delete_tracker(tid, uid):
+        return jsonify({"error": "Tracker not found."}), 404
+    logger.info("[Tracker] Deleted: %s", tid)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/trackers/<tid>/check", methods=["POST"])
+@login_required
+def check_now(tid):
+    uid = _user_id()
+    tracker = get_tracker(uid, tid)
+    if not tracker:
+        return jsonify({"error": "Tracker not found."}), 404
+
+    check_url = build_tracking_url(tracker["url"], tracker.get("checkin"), tracker.get("checkout"))
+    prev = get_last_price(tid, check_url)
+
+    price, packages = scrape_price_and_packages(
+        check_url,
+        tracker.get("price_selector"),
+        requirements=_requirements_from_tracker(tracker),
+    )
+
+    if price is None:
+        err = "Could not find a matching price for the same room/conditions at this link."
+        if "simplex-ltd.com" in (check_url or ""):
+            err = 'This site is currently protected by Cloudflare anti-bot challenge ("Click to reveal"). Automated price extraction is blocked right now.'
+        return jsonify(
+            {
+                "error": err,
+                "url": check_url,
+            }
+        ), 422
+
+    save_price(tid, price, check_url)
+
+    baseline_price, baseline_kind = _alert_baseline(tracker)
+    comparison_label = "You paid"
+    threshold_pct = float(tracker.get("threshold_pct") or 0)
+    drop_pct = ((baseline_price - price) / baseline_price * 100) if baseline_price > 0 else 0
+
+    blocker = explain_price_alert_blocker(tracker, baseline_price, price, prev, threshold_pct)
+    notification: dict = {
+        "eligible": blocker is None,
+        "blocker": blocker,
+        "email_sent": False,
+        **get_smtp_status(),
+        "email_skip_reason": None,
+    }
+
+    if blocker is None:
+        u = get_user_by_id(uid)
+        user_email = (u or {}).get("email")
+        ntfy_topic = (tracker.get("ntfy_topic") or "").strip() or None
+        kind = alert_kind_for_tracker(tracker)
+        savings_val = (
+            round(baseline_price - price, 2)
+            if kind == "drop" and baseline_price > 0
+            else None
+        )
+        mail_info = send_price_alert(
+            label=tracker.get("label") or tracker.get("url") or tid,
+            current_price=price,
+            currency=tracker.get("currency", "₪"),
+            url=check_url,
+            alert_kind=kind,
+            reference_price=baseline_price if baseline_price > 0 else None,
+            previous_price=prev,
+            savings=savings_val,
+            comparison_label=comparison_label,
+            packages=packages,
+            user_email=user_email,
+            ntfy_topic=ntfy_topic,
+        )
+        notification["email_sent"] = bool(mail_info.get("email_sent"))
+        notification["smtp_configured"] = bool(mail_info.get("smtp_configured"))
+        notification["email_skip_reason"] = mail_info.get("email_skip_reason")
+        if mail_info.get("email_sent"):
+            logger.info("[Check now] Price alert email sent for tracker %s (%s)", tid, kind)
+        else:
+            logger.warning(
+                "[Check now] Alert qualified but email not sent (%s)",
+                mail_info.get("email_skip_reason"),
+            )
+
+    return jsonify(
+        {
+            "price": price,
+            "previous_price": prev,
+            "paid_price": tracker.get("paid_price"),
+            "currency": tracker.get("currency", "₪"),
+            "packages": packages,
+            "is_drop": bool(baseline_price > 0 and price < baseline_price),
+            "meets_threshold": bool(drop_pct >= threshold_pct),
+            "checked_url": check_url,
+            # True only if SMTP actually delivered (not just "drop qualified")
+            "notification_sent": notification.get("email_sent", False),
+            "notification": notification,
+        }
+    )
+
+
+@app.route("/api/debug/run-check", methods=["POST"])
+@login_required
+def debug_run_check():
+    logger.info("[Debug] Manual scheduler run triggered via API")
+    check_all_trackers()
+    return jsonify({"status": "done", "message": "Scheduler ran now. Check terminal logs."})
+
+
+@app.route("/api/debug/logs", methods=["GET"])
+@login_required
+def debug_logs():
+    try:
+        with open("tracker.log", encoding="utf-8") as f:
+            lines = f.readlines()
+        return jsonify({"lines": lines[-50:]})
+    except FileNotFoundError:
+        return jsonify({"lines": []})
+
+
+@app.route("/api/test-notification", methods=["POST"])
+@login_required
+def test_notification():
+    raw = request.json or {}
+    topic = raw.get("topic")
+    uid = _user_id()
+    u = get_user_by_id(uid) if uid else None
+    email = (u or {}).get("email")
+    sent_mail = send_test_notification_email(email)
+    send_test_notification(topic)
+    return jsonify({"status": "sent", "email": bool(sent_mail), "ntfy": True})
+
+
+@app.route("/api/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"})
+
+
+if __name__ == "__main__":
+    init_db()
+    interval = int(os.getenv("CHECK_INTERVAL_MINUTES", 30))
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", 5000))
+    start_scheduler(interval_minutes=interval)
+    logger.info(
+        "[App] Hotel Price Tracker ready | supported: Astral, Dan, Fattal | checks every %s minutes",
+        interval,
+    )
+    logger.info("[App] Open: http://%s:%s", host, port)
+    logger.info(
+        "[App] Running local server mode. For production deployment, use a WSGI server on your hosting platform."
+    )
+    app.run(debug=False, host=host, port=port)

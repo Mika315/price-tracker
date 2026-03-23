@@ -1,0 +1,8 @@
+﻿.env
+.venv/
+.idea/
+__pycache__/
+*.pyc
+*.db
+tracker.log
+INTERVIEW_NOTES.md
