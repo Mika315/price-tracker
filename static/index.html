@@ -160,9 +160,16 @@
       </div>
       <div id="auth-error" class="error" style="margin-top:12px"></div>
     </div>
-    <div id="user-panel" class="user-bar" style="display:none">
-      <span class="email">Signed in as <strong id="user-email"></strong></span>
-      <button class="btn btn-ghost" type="button" onclick="doLogout()">Sign out</button>
+    <div id="user-panel" style="display:none; width:100%">
+      <div class="user-bar" style="margin-bottom:8px">
+        <span class="email">Signed in as <strong id="user-email"></strong></span>
+        <button class="btn btn-ghost" type="button" onclick="doLogout()">Sign out</button>
+      </div>
+      <div id="smtp-line" class="muted" style="font-size:13px; margin-bottom:8px"></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center">
+        <button class="btn btn-ghost" type="button" id="btn-test-email" onclick="sendTestEmail(this)">Send test email</button>
+        <span id="test-email-msg" class="muted" style="font-size:13px"></span>
+      </div>
     </div>
   </div>
 
@@ -170,8 +177,13 @@
   <div class="header">
     <div>
       <div class="title">Hotel Price Tracker</div>
-      <div class="sub">Set once, monitor automatically. Price alerts are sent to your email.</div>
+      <div class="sub">Set once, monitor automatically. Price alerts are sent to your email when the server has SMTP configured and the check qualifies (see below).</div>
       <div class="sub"><strong>Officially supported networks:</strong> Astral, Dan, Fattal. Other hotel websites are best-effort only.</div>
+      <details class="sub" style="margin-top:8px; cursor:pointer"><summary style="outline:none">When is a price-drop email sent?</summary>
+        <div class="muted" style="margin-top:6px; font-size:12px; line-height:1.45">
+          Default mode is <strong>only when price drops</strong>: you must set <strong>Price paid</strong> on the tracker, the live price must be <strong>below</strong> that amount, meet your <strong>Minimum %</strong> (use 0% to alert on any drop), and be <strong>lower than your last successful check</strong> (so you do not get repeat emails for the same price). Use <em>Send test email</em> after sign-in to verify mail delivery.
+        </div>
+      </details>
     </div>
     <div class="stats">
       <div class="stat"><div class="n" id="stat-count">0</div><div class="l">Trackers</div></div>
@@ -249,6 +261,18 @@
 <script>
 const fetchOpts = { credentials: 'include' };
 
+/** Strip invisible Unicode from pasted URLs (mobile RTL / WhatsApp / email). Harmless for desktop copy-paste from the browser bar. */
+function sanitizePastedUrl(s) {
+  if (!s || typeof s !== 'string') return s;
+  let t = s.replace(/[\u200B-\u200D\uFEFF\u2060]/g, '');
+  t = t.replace(/[\u202A-\u202E\u2066-\u2069]/g, '');
+  t = t.trim().replace(/^<+|>+$/g, '').trim();
+  if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
+    t = t.slice(1, -1).trim();
+  }
+  return t;
+}
+
 function showAuthError(msg) {
   const el = document.getElementById('auth-error');
   el.textContent = msg || '';
@@ -264,8 +288,13 @@ async function refreshSession() {
   const appMain = document.getElementById('app-main');
   if (user && user.email) {
     authForms.style.display = 'none';
-    userPanel.style.display = 'flex';
+    userPanel.style.display = 'block';
     document.getElementById('user-email').textContent = user.email;
+    const smtpOk = !!data.smtp_configured;
+    document.getElementById('smtp-line').textContent = smtpOk
+      ? 'Email alerts: server SMTP is configured (use “Send test email” to verify).'
+      : 'Email alerts: SMTP is not configured on the server — price emails cannot be sent until you set SMTP_* variables on Render (or your host).';
+    document.getElementById('test-email-msg').textContent = '';
     appMain.classList.add('visible');
     showAuthError('');
     load();
@@ -310,6 +339,38 @@ async function doLogout() {
   await fetch('/api/auth/logout', { ...fetchOpts, method: 'POST' });
   document.getElementById('trackers').innerHTML = '';
   await refreshSession();
+}
+
+async function sendTestEmail(btn) {
+  const msg = document.getElementById('test-email-msg');
+  msg.textContent = '';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/test-notification', {
+      ...fetchOpts,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const d = await r.json();
+    if (d.email_sent) {
+      msg.style.color = 'var(--good)';
+      msg.textContent = 'Test email sent — check your inbox and spam folder.';
+    } else if (d.email_skip_reason === 'smtp_not_configured') {
+      msg.style.color = 'var(--bad)';
+      msg.textContent = d.hint || 'Configure SMTP on the server.';
+    } else if (d.email_skip_reason === 'send_failed') {
+      msg.style.color = 'var(--bad)';
+      msg.textContent = 'SMTP is set but sending failed — check Render logs and provider settings (app password, MAIL_FROM).';
+    } else {
+      msg.style.color = 'var(--bad)';
+      msg.textContent = 'Test email was not sent.';
+    }
+  } catch (e) {
+    msg.style.color = 'var(--bad)';
+    msg.textContent = 'Request failed. Try again.';
+  }
+  btn.disabled = false;
 }
 
 let selectedCur = '₪';
@@ -406,7 +467,7 @@ async function saveTracker() {
   clearFormError();
 
   const label = document.getElementById('f-label').value.trim();
-  const url = document.getElementById('f-url').value.trim();
+  const url = sanitizePastedUrl(document.getElementById('f-url').value.trim());
   const editId = document.getElementById('f-edit-id').value;
 
   if (!label) return showFormError('Hotel name is required.');
@@ -611,6 +672,22 @@ async function load() {
 }
 
 refreshSession();
+const fUrl = document.getElementById('f-url');
+fUrl.addEventListener('blur', function () {
+  this.value = sanitizePastedUrl(this.value.trim());
+});
+fUrl.addEventListener('paste', function (e) {
+  const text = e.clipboardData && e.clipboardData.getData('text/plain');
+  if (text == null || text === '') return;
+  e.preventDefault();
+  const el = e.target;
+  const start = el.selectionStart != null ? el.selectionStart : el.value.length;
+  const end = el.selectionEnd != null ? el.selectionEnd : el.value.length;
+  const cleaned = sanitizePastedUrl(text);
+  el.value = el.value.slice(0, start) + cleaned + el.value.slice(end);
+  const pos = start + cleaned.length;
+  el.setSelectionRange(pos, pos);
+});
 </script>
 </body>
 </html>

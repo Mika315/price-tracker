@@ -11,6 +11,8 @@ import os
 import sqlite3
 from typing import Any
 
+from url_sanitize import sanitize_url
+
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "hotel_tracker.db")
@@ -247,10 +249,16 @@ def get_user_by_id(user_id: str) -> dict | None:
 
 def _decode_tracker(row: Any) -> dict:
     item = dict(row)
+    if item.get("url"):
+        item["url"] = sanitize_url(item["url"])
     try:
-        item["alternative_urls"] = json.loads(item.get("alternative_urls") or "[]")
+        raw_alt = json.loads(item.get("alternative_urls") or "[]")
     except json.JSONDecodeError:
-        item["alternative_urls"] = []
+        raw_alt = []
+    cleaned_alt = []
+    for x in raw_alt:
+        cleaned_alt.append(sanitize_url(x) if isinstance(x, str) else x)
+    item["alternative_urls"] = cleaned_alt
     return item
 
 

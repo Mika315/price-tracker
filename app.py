@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 from flask import Flask, jsonify, request, send_from_directory, session
 
 from auth_helpers import login_required, login_user, register_user
+from url_sanitize import sanitize_url as _sanitize_url
 from database import (
     delete_tracker,
     get_all_trackers,
@@ -87,7 +88,7 @@ def _normalize_tracker_payload(payload: dict, existing_id: str | None = None) ->
         data["id"] = str(uuid.uuid4())[:8]
 
     data["label"] = (data.get("label") or "").strip()
-    data["url"] = (data.get("url") or "").strip()
+    data["url"] = _sanitize_url((data.get("url") or ""))
 
     meal_plan = (data.get("meal_plan") or "none").lower()
     if meal_plan not in {"none", "breakfast", "half_board", "full_board"}:
@@ -120,6 +121,14 @@ def _normalize_tracker_payload(payload: dict, existing_id: str | None = None) ->
 
     if not isinstance(data.get("alternative_urls"), list):
         data["alternative_urls"] = []
+    else:
+        cleaned: list = []
+        for item in data["alternative_urls"]:
+            if isinstance(item, str):
+                cleaned.append(_sanitize_url(item))
+            else:
+                cleaned.append(item)
+        data["alternative_urls"] = cleaned
 
     return data
 
@@ -168,10 +177,11 @@ def auth_logout():
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
     uid = _user_id()
+    smtp = get_smtp_status()
     if not uid:
-        return jsonify({"user": None})
+        return jsonify({"user": None, **smtp})
     u = _public_user(get_user_by_id(uid))
-    return jsonify({"user": u})
+    return jsonify({"user": u, **smtp})
 
 
 # --- App ---
@@ -380,9 +390,33 @@ def test_notification():
     uid = _user_id()
     u = get_user_by_id(uid) if uid else None
     email = (u or {}).get("email")
-    sent_mail = send_test_notification_email(email)
+    smtp = get_smtp_status()
+    smtp_ok = bool(smtp.get("smtp_configured"))
+
+    sent_mail = False
+    email_skip = None
+    if not email:
+        email_skip = "no_user_email"
+    elif not smtp_ok:
+        email_skip = "smtp_not_configured"
+    else:
+        sent_mail = bool(send_test_notification_email(email))
+        if not sent_mail:
+            email_skip = "send_failed"
+
     send_test_notification(topic)
-    return jsonify({"status": "sent", "email": bool(sent_mail), "ntfy": True})
+
+    return jsonify(
+        {
+            **smtp,
+            "email_sent": sent_mail,
+            "email_skip_reason": email_skip,
+            "ntfy_ping": True,
+            "hint": None
+            if smtp_ok
+            else "Add SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and MAIL_FROM to your host (e.g. Render) environment, then redeploy.",
+        }
+    )
 
 
 @app.route("/api/health", methods=["GET"])
