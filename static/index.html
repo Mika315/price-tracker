@@ -130,7 +130,26 @@
   .tag-reserve { background: #fff3e6; border-color: #ffd9b3; color: #9a3412; }
   .tag-club { background: #ecfff3; border-color: #bff3d0; color: #0f766e; }
   .tag-threshold { background: #f3e8ff; border-color: #e7d2fe; color: #6d28d9; }
-  .pkg-wrap { margin-top: 8px; display: none; }
+  .pkg-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .pkg-toggle {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #eaf3ff;
+    color: #0b4f71;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    text-align: left;
+  }
+  .pkg-toggle:hover { filter: brightness(0.98); }
+  .pkg-chevron { font-size: 18px; font-weight: 800; width: 1.2em; text-align: center; line-height: 1; }
+  .pkg-wrap-inner { margin-top: 8px; display: none; }
+  .pkg-wrap-inner.open { display: block; }
   .pkg { border: 1px solid #d9e7f7; border-radius: 10px; padding: 8px; margin-bottom: 6px; background: #f7fbff; }
 
   .status {
@@ -293,6 +312,8 @@ const fetchOpts = { credentials: 'include' };
 /** After "Check now", delay list refresh so status/error text stays readable (ms). */
 const CHECK_OK_REFRESH_MS = 10000;
 const CHECK_ERROR_REFRESH_MS = 22000;
+const PKG_CACHE_KEY = 'pkgCache_v1_';
+const PKG_OPEN_KEY = 'pkgOpen_v1_';
 
 /** Strip invisible Unicode from pasted URLs (mobile RTL / WhatsApp / email). Harmless for desktop copy-paste from the browser bar. */
 function sanitizePastedUrl(s) {
@@ -655,7 +676,8 @@ async function checkNow(id, btn) {
   const status = document.getElementById(`status-${id}`);
   status.textContent = 'Checking Astral price on server…';
   status.style.color = 'var(--muted)';
-  const pkgWrap = document.getElementById(`packages-${id}`);
+  const pkgSection = document.getElementById(`pkg-section-${id}`);
+  const pkgInner = document.getElementById(`packages-${id}`);
   let refreshMs = CHECK_OK_REFRESH_MS;
 
   try {
@@ -709,18 +731,14 @@ async function checkNow(id, btn) {
       }
 
       if (data.packages && data.packages.length) {
-        pkgWrap.innerHTML = data.packages.map(p => `
-          <div class="pkg">
-            <div><strong>${p.room_name || 'Room option'}</strong></div>
-            <div>${data.currency || '₪'}${p.price}</div>
-            <div class="muted">
-              Breakfast: ${p.breakfast ? 'Yes' : 'No'} | Half board: ${p.half_board ? 'Yes' : 'No'} |
-              Full board: ${p.full_board ? 'Yes' : 'No'} |
-              Reserve duty: ${p.reserve_duty ? 'Yes' : 'No'}
-            </div>
-          </div>
-        `).join('');
-        pkgWrap.style.display = 'block';
+        const cur = data.currency || '₪';
+        savePackagesCache(id, cur, data.packages);
+        setPkgSectionOpen(id, true);
+        if (pkgSection) pkgSection.style.display = 'block';
+        if (pkgInner) {
+          pkgInner.innerHTML = renderPackagesHtml(cur, data.packages);
+          syncPackageToggleUi(id, true);
+        }
       }
     }
   } catch (err) {
@@ -741,6 +759,7 @@ async function checkNow(id, btn) {
 async function removeTracker(id) {
   if (!confirm('Delete this tracker?')) return;
   await fetch(`/api/trackers/${id}`, { ...fetchOpts, method: 'DELETE' });
+  clearPackagesCache(id);
   load();
 }
 
@@ -751,6 +770,105 @@ function mealLabel(mealPlan) {
     half_board: 'Meal: half board',
     full_board: 'Meal: full board',
   }[mealPlan || 'none'];
+}
+
+function savePackagesCache(trackerId, currency, packages) {
+  try {
+    sessionStorage.setItem(
+      PKG_CACHE_KEY + trackerId,
+      JSON.stringify({ currency: currency || '₪', packages: packages || [], savedAt: Date.now() }),
+    );
+  } catch (e) { /* quota / private mode */ }
+}
+
+function loadPackagesCache(trackerId) {
+  try {
+    const raw = sessionStorage.getItem(PKG_CACHE_KEY + trackerId);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o || !Array.isArray(o.packages) || !o.packages.length) return null;
+    return o;
+  } catch (e) {
+    return null;
+  }
+}
+
+function clearPackagesCache(trackerId) {
+  try {
+    sessionStorage.removeItem(PKG_CACHE_KEY + trackerId);
+    sessionStorage.removeItem(PKG_OPEN_KEY + trackerId);
+  } catch (e) { /* ignore */ }
+}
+
+function isPkgSectionOpen(trackerId) {
+  return sessionStorage.getItem(PKG_OPEN_KEY + trackerId) === '1';
+}
+
+function setPkgSectionOpen(trackerId, open) {
+  try {
+    sessionStorage.setItem(PKG_OPEN_KEY + trackerId, open ? '1' : '0');
+  } catch (e) { /* ignore */ }
+}
+
+function escHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function renderPackagesHtml(currency, packages) {
+  const cur = currency || '₪';
+  return packages.map(p => `
+    <div class="pkg">
+      <div><strong>${escHtml(p.room_name || 'Room option')}</strong></div>
+      <div>${cur}${p.price}</div>
+      <div class="muted">
+        Breakfast: ${p.breakfast ? 'Yes' : 'No'} | Half board: ${p.half_board ? 'Yes' : 'No'} |
+        Full board: ${p.full_board ? 'Yes' : 'No'} |
+        Reserve duty: ${p.reserve_duty ? 'Yes' : 'No'}
+      </div>
+    </div>
+  `).join('');
+}
+
+function syncPackageToggleUi(trackerId, open) {
+  const inner = document.getElementById(`packages-${trackerId}`);
+  const btn = document.getElementById(`pkg-toggle-${trackerId}`);
+  if (inner) {
+    inner.classList.toggle('open', open);
+  }
+  if (btn) {
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const t = btn.querySelector('.pkg-toggle-text');
+    const c = btn.querySelector('.pkg-chevron');
+    if (t) t.textContent = open ? 'Hide room options' : 'Show room options';
+    if (c) c.textContent = open ? '−' : '+';
+  }
+}
+
+function applyPackagePanelForTracker(trackerId) {
+  const section = document.getElementById(`pkg-section-${trackerId}`);
+  const cached = loadPackagesCache(trackerId);
+  if (!section) return;
+  if (!cached) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  const inner = document.getElementById(`packages-${trackerId}`);
+  if (inner) inner.innerHTML = renderPackagesHtml(cached.currency, cached.packages);
+  const open = isPkgSectionOpen(trackerId);
+  syncPackageToggleUi(trackerId, open);
+}
+
+function togglePackages(trackerId) {
+  const cached = loadPackagesCache(trackerId);
+  if (!cached) return;
+  const next = !isPkgSectionOpen(trackerId);
+  setPkgSectionOpen(trackerId, next);
+  syncPackageToggleUi(trackerId, next);
 }
 
 /** Baseline for “cheaper than” / stats: paid_price only. */
@@ -817,10 +935,18 @@ async function load() {
         </div>
 
         <div id="status-${t.id}" class="status"></div>
-        <div id="packages-${t.id}" class="pkg-wrap"></div>
+        <div id="pkg-section-${t.id}" class="pkg-section" style="display:none">
+          <button type="button" class="pkg-toggle" id="pkg-toggle-${t.id}" onclick="togglePackages('${t.id}')" aria-expanded="false">
+            <span class="pkg-chevron">+</span>
+            <span class="pkg-toggle-text">Show room options</span>
+          </button>
+          <div id="packages-${t.id}" class="pkg-wrap-inner"></div>
+        </div>
       </div>
     `;
   }).join('');
+
+  trackers.forEach(t => applyPackagePanelForTracker(t.id));
 }
 
 refreshSession();
