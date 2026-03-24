@@ -26,7 +26,9 @@ Other hotel websites may still work, but are treated as **best effort** (no guar
 ## Technical features
 
 - Per-user data isolation (each account sees only its own trackers/history).
-- Local SQLite database (`hotel_tracker.db` by default).
+- Dual DB mode:
+  - **Production**: PostgreSQL via `DATABASE_URL` (recommended for Render/Supabase).
+  - **Local fallback**: SQLite (`hotel_tracker.db`) when `DATABASE_URL` is not set.
 - Background scheduler for automatic checks.
 - Optional ntfy topic per tracker.
 
@@ -47,6 +49,7 @@ Email sending is configured on the server where `app.py` runs.
 
 Required environment variables:
 
+- `DATABASE_URL` (for cloud persistence, e.g. Supabase Postgres)
 - `SMTP_HOST`
 - `SMTP_PORT` (`587` or `465`)
 - `SMTP_USER`
@@ -71,6 +74,18 @@ If email does not arrive:
 4. For `Any change` / `Only when price rises`, the first run sets baseline; next run can trigger.
 5. Check spam folder.
 6. Check `tracker.log` for email errors.
+
+## Persistent database on Render (free setup with Supabase)
+
+1. Create a Supabase project.
+2. Open **Project Settings -> Database** in Supabase.
+3. Copy the Postgres connection string (URI), and ensure it includes `sslmode=require`.
+4. In Render service -> **Environment**, add:
+   - `DATABASE_URL=<your-supabase-postgres-uri>`
+5. Keep your SMTP env vars as before.
+6. Deploy again (`Manual Deploy -> Deploy latest commit`).
+
+When `DATABASE_URL` is set, the app automatically uses PostgreSQL and your data persists across restarts/sleep.
 
 ## GitHub Actions (`daily_check.yml`)
 

@@ -1,33 +1,153 @@
 """
-SQLite database layer.
-Stores trackers with booking context + price history.
+Database layer with dual backend support:
+- PostgreSQL via DATABASE_URL (recommended for cloud hosting)
+- SQLite fallback via DB_PATH (local development)
 """
+from __future__ import annotations
+
 import json
 import logging
 import os
 import sqlite3
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
 DB_PATH = os.getenv("DB_PATH", "hotel_tracker.db")
+DATABASE_URL = (os.getenv("DATABASE_URL") or "").strip()
+
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except Exception:  # pragma: no cover
+    psycopg = None
+    dict_row = None
+
+
+def _use_postgres() -> bool:
+    return DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://")
+
+
+def _ph() -> str:
+    return "%s" if _use_postgres() else "?"
 
 
 def _conn():
+    if _use_postgres():
+        if psycopg is None:
+            raise RuntimeError("DATABASE_URL is set but psycopg is not installed.")
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row)
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row
     return c
 
 
-def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+def _column_names_sqlite(conn: sqlite3.Connection, table: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return {r[1] for r in rows}
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, name: str, ddl: str):
-    if name not in _column_names(conn, table):
+def _column_names_pg(conn: Any, table: str) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = %s
+        """,
+        (table,),
+    ).fetchall()
+    return {r["column_name"] for r in rows}
+
+
+def _ensure_column_sqlite(conn: sqlite3.Connection, table: str, name: str, ddl: str):
+    if name not in _column_names_sqlite(conn, table):
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
 
 def init_db():
+    if _use_postgres():
+        with _conn() as c:
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id             TEXT PRIMARY KEY,
+                    email          TEXT UNIQUE NOT NULL,
+                    password_hash  TEXT NOT NULL,
+                    created_at     TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS trackers (
+                    id                   TEXT PRIMARY KEY,
+                    user_id              TEXT REFERENCES users(id) ON DELETE CASCADE,
+                    label                TEXT,
+                    url                  TEXT NOT NULL,
+                    checkin              TEXT,
+                    checkout             TEXT,
+                    paid_price           DOUBLE PRECISION,
+                    currency             TEXT DEFAULT '₪',
+                    price_selector       TEXT,
+                    meal_plan            TEXT DEFAULT 'none',
+                    require_free_cancel  INTEGER DEFAULT 0,
+                    room_keyword         TEXT DEFAULT '',
+                    reserve_duty_only    INTEGER DEFAULT 0,
+                    club_membership_only INTEGER DEFAULT 0,
+                    threshold_pct        DOUBLE PRECISION DEFAULT 0,
+                    alert_direction      TEXT DEFAULT 'down',
+                    notes                TEXT,
+                    purchase_date        TEXT,
+                    alternative_urls     TEXT DEFAULT '[]',
+                    ntfy_topic           TEXT,
+                    active               INTEGER DEFAULT 1,
+                    created_at           TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE TABLE IF NOT EXISTS price_history (
+                    id          BIGSERIAL PRIMARY KEY,
+                    tracker_id  TEXT NOT NULL REFERENCES trackers(id) ON DELETE CASCADE,
+                    url         TEXT,
+                    price       DOUBLE PRECISION NOT NULL,
+                    checked_at  TIMESTAMPTZ DEFAULT NOW()
+                )
+                """
+            )
+            c.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_ph_tracker_url
+                ON price_history(tracker_id, url, checked_at DESC)
+                """
+            )
+            # Defensive migrations for existing PG tables
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE CASCADE")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS meal_plan TEXT DEFAULT 'none'")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS require_free_cancel INTEGER DEFAULT 0")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS room_keyword TEXT DEFAULT ''")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS reserve_duty_only INTEGER DEFAULT 0")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS club_membership_only INTEGER DEFAULT 0")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS threshold_pct DOUBLE PRECISION DEFAULT 0")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS alert_direction TEXT DEFAULT 'down'")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS notes TEXT")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS purchase_date TEXT")
+            c.execute("ALTER TABLE trackers ADD COLUMN IF NOT EXISTS alternative_urls TEXT DEFAULT '[]'")
+
+            cols = _column_names_pg(c, "trackers")
+            if "require_breakfast" in cols:
+                c.execute(
+                    """
+                    UPDATE trackers
+                    SET meal_plan = 'breakfast'
+                    WHERE COALESCE(require_breakfast, 0) = 1
+                      AND COALESCE(meal_plan, 'none') = 'none'
+                    """
+                )
+        logger.info("[DB] Initialized PostgreSQL at DATABASE_URL")
+        return
+
     with _conn() as c:
         c.execute("PRAGMA foreign_keys = ON")
         c.executescript(
@@ -40,27 +160,28 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS trackers (
-                id                  TEXT PRIMARY KEY,
-                label               TEXT,
-                url                 TEXT NOT NULL,
-                checkin             TEXT,
-                checkout            TEXT,
-                paid_price          REAL,
-                currency            TEXT DEFAULT '₪',
-                price_selector      TEXT,
-                meal_plan           TEXT DEFAULT 'none',
-                require_free_cancel INTEGER DEFAULT 0,
-                room_keyword        TEXT DEFAULT '',
-                reserve_duty_only   INTEGER DEFAULT 0,
+                id                   TEXT PRIMARY KEY,
+                user_id              TEXT REFERENCES users(id) ON DELETE CASCADE,
+                label                TEXT,
+                url                  TEXT NOT NULL,
+                checkin              TEXT,
+                checkout             TEXT,
+                paid_price           REAL,
+                currency             TEXT DEFAULT '₪',
+                price_selector       TEXT,
+                meal_plan            TEXT DEFAULT 'none',
+                require_free_cancel  INTEGER DEFAULT 0,
+                room_keyword         TEXT DEFAULT '',
+                reserve_duty_only    INTEGER DEFAULT 0,
                 club_membership_only INTEGER DEFAULT 0,
-                threshold_pct       REAL DEFAULT 0,
-                alert_direction     TEXT DEFAULT 'down',
-                notes               TEXT,
-                purchase_date       TEXT,
-                alternative_urls    TEXT DEFAULT '[]',
-                ntfy_topic          TEXT,
-                active              INTEGER DEFAULT 1,
-                created_at          TEXT DEFAULT (datetime('now'))
+                threshold_pct        REAL DEFAULT 0,
+                alert_direction      TEXT DEFAULT 'down',
+                notes                TEXT,
+                purchase_date        TEXT,
+                alternative_urls     TEXT DEFAULT '[]',
+                ntfy_topic           TEXT,
+                active               INTEGER DEFAULT 1,
+                created_at           TEXT DEFAULT (datetime('now'))
             );
 
             CREATE TABLE IF NOT EXISTS price_history (
@@ -75,22 +196,19 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_ph_tracker_url ON price_history(tracker_id, url, checked_at DESC);
             """
         )
+        _ensure_column_sqlite(c, "trackers", "meal_plan", "TEXT DEFAULT 'none'")
+        _ensure_column_sqlite(c, "trackers", "require_free_cancel", "INTEGER DEFAULT 0")
+        _ensure_column_sqlite(c, "trackers", "room_keyword", "TEXT DEFAULT ''")
+        _ensure_column_sqlite(c, "trackers", "reserve_duty_only", "INTEGER DEFAULT 0")
+        _ensure_column_sqlite(c, "trackers", "club_membership_only", "INTEGER DEFAULT 0")
+        _ensure_column_sqlite(c, "trackers", "threshold_pct", "REAL DEFAULT 0")
+        _ensure_column_sqlite(c, "trackers", "alert_direction", "TEXT DEFAULT 'down'")
+        _ensure_column_sqlite(c, "trackers", "notes", "TEXT")
+        _ensure_column_sqlite(c, "trackers", "purchase_date", "TEXT")
+        _ensure_column_sqlite(c, "trackers", "alternative_urls", "TEXT DEFAULT '[]'")
+        _ensure_column_sqlite(c, "trackers", "user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE")
 
-        # Backward-compatible migrations for older DB files.
-        _ensure_column(c, "trackers", "meal_plan", "TEXT DEFAULT 'none'")
-        _ensure_column(c, "trackers", "require_free_cancel", "INTEGER DEFAULT 0")
-        _ensure_column(c, "trackers", "room_keyword", "TEXT DEFAULT ''")
-        _ensure_column(c, "trackers", "reserve_duty_only", "INTEGER DEFAULT 0")
-        _ensure_column(c, "trackers", "club_membership_only", "INTEGER DEFAULT 0")
-        _ensure_column(c, "trackers", "threshold_pct", "REAL DEFAULT 0")
-        _ensure_column(c, "trackers", "alert_direction", "TEXT DEFAULT 'down'")
-        _ensure_column(c, "trackers", "notes", "TEXT")
-        _ensure_column(c, "trackers", "purchase_date", "TEXT")
-        _ensure_column(c, "trackers", "alternative_urls", "TEXT DEFAULT '[]'")
-        _ensure_column(c, "trackers", "user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE")
-
-        # If legacy boolean breakfast column exists, map it to meal_plan once.
-        cols = _column_names(c, "trackers")
+        cols = _column_names_sqlite(c, "trackers")
         if "require_breakfast" in cols:
             c.execute(
                 """
@@ -101,30 +219,33 @@ def init_db():
                 """
             )
 
-    logger.info("[DB] Initialized at %s", DB_PATH)
+    logger.info("[DB] Initialized SQLite at %s", DB_PATH)
 
 
 def create_user(user_id: str, email: str, password_hash: str):
+    q = _ph()
     with _conn() as c:
         c.execute(
-            "INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)",
+            f"INSERT INTO users (id, email, password_hash) VALUES ({q}, {q}, {q})",
             (user_id, email, password_hash),
         )
 
 
 def get_user_by_email(email: str) -> dict | None:
+    q = _ph()
     with _conn() as c:
-        row = c.execute("SELECT * FROM users WHERE email = ?", (email.lower().strip(),)).fetchone()
+        row = c.execute(f"SELECT * FROM users WHERE email = {q}", (email.lower().strip(),)).fetchone()
     return dict(row) if row else None
 
 
 def get_user_by_id(user_id: str) -> dict | None:
+    q = _ph()
     with _conn() as c:
-        row = c.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = c.execute(f"SELECT * FROM users WHERE id = {q}", (user_id,)).fetchone()
     return dict(row) if row else None
 
 
-def _decode_tracker(row: sqlite3.Row) -> dict:
+def _decode_tracker(row: Any) -> dict:
     item = dict(row)
     try:
         item["alternative_urls"] = json.loads(item.get("alternative_urls") or "[]")
@@ -134,12 +255,13 @@ def _decode_tracker(row: sqlite3.Row) -> dict:
 
 
 def get_all_trackers(user_id: str | None = None) -> list[dict]:
+    q = _ph()
     with _conn() as c:
         if user_id is not None:
             rows = c.execute(
-                """
+                f"""
                 SELECT * FROM trackers
-                WHERE active = 1 AND user_id = ?
+                WHERE active = 1 AND user_id = {q}
                 ORDER BY created_at DESC
                 """,
                 (user_id,),
@@ -150,9 +272,10 @@ def get_all_trackers(user_id: str | None = None) -> list[dict]:
 
 
 def get_tracker(user_id: str, tracker_id: str) -> dict | None:
+    q = _ph()
     with _conn() as c:
         row = c.execute(
-            "SELECT * FROM trackers WHERE id = ? AND user_id = ?",
+            f"SELECT * FROM trackers WHERE id = {q} AND user_id = {q}",
             (tracker_id, user_id),
         ).fetchone()
     return _decode_tracker(row) if row else None
@@ -165,12 +288,8 @@ def upsert_tracker(data: dict):
     if not tid:
         raise ValueError("Tracker id is required.")
 
-    # Backward compatibility for old clients.
     if payload.get("meal_plan") in (None, ""):
-        if payload.get("require_breakfast"):
-            payload["meal_plan"] = "breakfast"
-        else:
-            payload["meal_plan"] = "none"
+        payload["meal_plan"] = "breakfast" if payload.get("require_breakfast") else "none"
 
     if isinstance(payload.get("alternative_urls"), list):
         payload["alternative_urls"] = json.dumps(payload["alternative_urls"], ensure_ascii=False)
@@ -198,14 +317,14 @@ def upsert_tracker(data: dict):
         "ntfy_topic",
         "active",
     ]
+    q = _ph()
 
     with _conn() as c:
-        existing = c.execute("SELECT user_id FROM trackers WHERE id = ?", (tid,)).fetchone()
+        existing = c.execute(f"SELECT user_id FROM trackers WHERE id = {q}", (tid,)).fetchone()
         if existing:
             ex_uid = existing["user_id"]
             if ex_uid and user_id and ex_uid != user_id:
                 raise PermissionError("Tracker belongs to another account.")
-            # Keep owner on update; allow setting user_id on legacy rows with NULL when caller supplies it.
             payload["user_id"] = user_id or ex_uid or payload.get("user_id")
         else:
             default_uid = os.getenv("IMPORT_USER_ID")
@@ -216,8 +335,7 @@ def upsert_tracker(data: dict):
 
         cols = [f for f in fields if f in payload]
         vals = [payload[c] for c in cols]
-
-        placeholders = ", ".join(["?"] * len(cols))
+        placeholders = ", ".join([q] * len(cols))
         updates = ", ".join([f"{c} = excluded.{c}" for c in cols if c != "id"])
 
         sql = f"""
@@ -228,32 +346,34 @@ def upsert_tracker(data: dict):
 
 
 def delete_tracker(tid: str, user_id: str | None = None) -> bool:
-    """Returns True if a row was deleted."""
+    q = _ph()
     with _conn() as c:
         if user_id is not None:
-            cur = c.execute("DELETE FROM trackers WHERE id = ? AND user_id = ?", (tid, user_id))
+            cur = c.execute(f"DELETE FROM trackers WHERE id = {q} AND user_id = {q}", (tid, user_id))
         else:
-            cur = c.execute("DELETE FROM trackers WHERE id = ?", (tid,))
+            cur = c.execute(f"DELETE FROM trackers WHERE id = {q}", (tid,))
         return cur.rowcount > 0
 
 
 def save_price(tracker_id: str, price: float, url: str = ""):
+    q = _ph()
     with _conn() as c:
         c.execute(
-            "INSERT INTO price_history (tracker_id, url, price) VALUES (?, ?, ?)",
+            f"INSERT INTO price_history (tracker_id, url, price) VALUES ({q}, {q}, {q})",
             (tracker_id, url or "", price),
         )
 
 
 def get_price_history(tracker_id: str, limit: int = 30) -> list[dict]:
+    q = _ph()
     with _conn() as c:
         rows = c.execute(
-            """
+            f"""
             SELECT price, checked_at, url
             FROM price_history
-            WHERE tracker_id = ?
+            WHERE tracker_id = {q}
             ORDER BY checked_at DESC
-            LIMIT ?
+            LIMIT {q}
             """,
             (tracker_id, limit),
         ).fetchall()
@@ -261,13 +381,14 @@ def get_price_history(tracker_id: str, limit: int = 30) -> list[dict]:
 
 
 def get_last_price(tracker_id: str, url: str = "") -> float | None:
+    q = _ph()
     with _conn() as c:
         if url:
             row = c.execute(
-                """
+                f"""
                 SELECT price
                 FROM price_history
-                WHERE tracker_id = ? AND url = ?
+                WHERE tracker_id = {q} AND url = {q}
                 ORDER BY checked_at DESC
                 LIMIT 1
                 """,
@@ -275,10 +396,10 @@ def get_last_price(tracker_id: str, url: str = "") -> float | None:
             ).fetchone()
         else:
             row = c.execute(
-                """
+                f"""
                 SELECT price
                 FROM price_history
-                WHERE tracker_id = ?
+                WHERE tracker_id = {q}
                 ORDER BY checked_at DESC
                 LIMIT 1
                 """,
