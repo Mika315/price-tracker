@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Hotel Price Tracker</title>
+<title>Astral Hotels Price Tracker</title>
 <style>
   :root {
     --bg: #e8f8ff;
@@ -150,15 +150,40 @@
   <div id="auth-section" class="auth-card">
     <h2 id="auth-title">Sign in</h2>
     <div id="auth-forms">
-      <label>Email</label>
-      <input id="auth-email" type="email" autocomplete="username" placeholder="you@example.com" />
-      <label>Password (min 8 characters)</label>
-      <input id="auth-password" type="password" autocomplete="current-password" placeholder="••••••••" />
-      <div class="auth-row">
-        <button class="btn btn-primary" type="button" onclick="doLogin()">Sign in</button>
-        <button class="btn btn-ghost" type="button" onclick="doRegister()">Create account</button>
+      <div id="login-panel">
+        <label>Email</label>
+        <input id="auth-email" type="email" autocomplete="username" placeholder="you@example.com" />
+        <label>Password (min 8 characters)</label>
+        <input id="auth-password" type="password" autocomplete="current-password" placeholder="••••••••" />
+        <div class="auth-row">
+          <button class="btn btn-primary" type="button" onclick="doLogin()">Sign in</button>
+          <button class="btn btn-ghost" type="button" onclick="doRegister()">Create account</button>
+        </div>
+        <button class="btn btn-ghost" type="button" onclick="showForgotPanel()" style="margin-top:10px;width:100%">Forgot password?</button>
+        <div id="auth-error" class="error" style="margin-top:12px"></div>
       </div>
-      <div id="auth-error" class="error" style="margin-top:12px"></div>
+      <div id="forgot-panel" style="display:none">
+        <p class="muted" style="font-size:13px;margin:0 0 8px">Enter your account email. If it exists, we will send a reset link (SMTP must be configured on the server).</p>
+        <label>Email</label>
+        <input id="forgot-email" type="email" autocomplete="email" placeholder="you@example.com" />
+        <div class="auth-row" style="margin-top:10px">
+          <button class="btn btn-primary" type="button" onclick="doForgotPassword()">Send reset link</button>
+          <button class="btn btn-ghost" type="button" onclick="showLoginPanel()">Back to sign in</button>
+        </div>
+        <div id="forgot-msg" class="muted" style="margin-top:10px;font-size:13px"></div>
+      </div>
+      <div id="reset-panel" style="display:none">
+        <p class="muted" style="font-size:13px;margin:0 0 8px">Choose a new password for your account.</p>
+        <input type="hidden" id="reset-token" />
+        <label>New password</label>
+        <input id="reset-pass1" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters" />
+        <label>Confirm password</label>
+        <input id="reset-pass2" type="password" autocomplete="new-password" minlength="8" placeholder="Repeat password" />
+        <div class="auth-row" style="margin-top:10px">
+          <button class="btn btn-primary" type="button" onclick="doResetPassword()">Save new password</button>
+        </div>
+        <div id="reset-msg" class="error" style="margin-top:10px;display:none"></div>
+      </div>
     </div>
     <div id="user-panel" style="display:none; width:100%">
       <div class="user-bar" style="margin-bottom:8px">
@@ -176,12 +201,12 @@
   <div id="app-main">
   <div class="header">
     <div>
-      <div class="title">Hotel Price Tracker</div>
-      <div class="sub">Set once, monitor automatically. Price alerts are sent to your email when the server has SMTP configured and the check qualifies (see below).</div>
-      <div class="sub"><strong>Officially supported networks:</strong> Astral, Dan, Fattal. Other hotel websites are best-effort only.</div>
+      <div class="title">Astral Hotels Price Tracker</div>
+      <div class="sub">This app is for <strong>Astral Hotels only</strong> (<code>astralhotels.co.il</code>). Add a booking URL with your dates; we check prices on a schedule and can email you when your rules match.</div>
+      <div class="sub muted" style="font-size:12px">Price checks run on the server using Astral’s booking flow and API. Paste the full URL from your browser after selecting dates and room options.</div>
       <details class="sub" style="margin-top:8px; cursor:pointer"><summary style="outline:none">When is a price-drop email sent?</summary>
         <div class="muted" style="margin-top:6px; font-size:12px; line-height:1.45">
-          Default mode is <strong>only when price drops</strong>: you must set <strong>Price paid</strong> on the tracker, the live price must be <strong>below</strong> that amount, meet your <strong>Minimum %</strong> (use 0% to alert on any drop), and be <strong>lower than your last successful check</strong> (so you do not get repeat emails for the same price). Use <em>Send test email</em> after sign-in to verify mail delivery.
+          Default mode is <strong>only when price drops</strong>: set <strong>Price paid</strong>, the live Astral price must be <strong>below</strong> that, meet your <strong>Minimum %</strong> (use 0% for any drop), and be <strong>lower than your last successful check</strong>. After sign-in, use <em>Send test email</em> to verify SMTP.
         </div>
       </details>
     </div>
@@ -191,20 +216,20 @@
     </div>
   </div>
 
-  <button id="toggle-btn" class="toggle-btn" onclick="toggleForm()">+ Add Hotel</button>
+  <button id="toggle-btn" class="toggle-btn" onclick="toggleForm()">+ Add Astral stay</button>
 
   <div id="form-wrap" class="panel">
     <input type="hidden" id="f-edit-id" />
 
     <div class="section">Basics</div>
-    <label>Hotel Name</label>
-    <input id="f-label" placeholder="Example: Astral Maris" />
+    <label>Hotel name</label>
+    <input id="f-label" placeholder="e.g. Astral Village" />
 
-    <label>Hotel/Room URL</label>
+    <label>Astral booking URL</label>
     <div class="muted" style="margin-top:-2px;margin-bottom:6px;font-size:12px">
-      Saved in the database with this tracker. Use a link that includes your dates and shows a visible price.
+      Must be on <strong>astralhotels.co.il</strong> with your stay dates in the query string. Other hotel sites are rejected.
     </div>
-    <input id="f-url" placeholder="https://..." />
+    <input id="f-url" placeholder="https://www.astralhotels.co.il/..." />
 
     <label>Notes</label>
     <input id="f-notes" placeholder="2 adults, deluxe room" />
@@ -287,6 +312,9 @@ async function refreshSession() {
   const userPanel = document.getElementById('user-panel');
   const appMain = document.getElementById('app-main');
   if (user && user.email) {
+    if (new URLSearchParams(window.location.search).get('reset')) {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
     authForms.style.display = 'none';
     userPanel.style.display = 'block';
     document.getElementById('user-email').textContent = user.email;
@@ -302,6 +330,11 @@ async function refreshSession() {
     authForms.style.display = 'block';
     userPanel.style.display = 'none';
     appMain.classList.remove('visible');
+    if (new URLSearchParams(window.location.search).get('reset')) {
+      initResetFromUrl();
+    } else {
+      showLoginPanel();
+    }
   }
 }
 
@@ -339,6 +372,107 @@ async function doLogout() {
   await fetch('/api/auth/logout', { ...fetchOpts, method: 'POST' });
   document.getElementById('trackers').innerHTML = '';
   await refreshSession();
+}
+
+function showForgotPanel() {
+  document.getElementById('login-panel').style.display = 'none';
+  document.getElementById('forgot-panel').style.display = 'block';
+  document.getElementById('reset-panel').style.display = 'none';
+  document.getElementById('auth-title').textContent = 'Reset password';
+  document.getElementById('forgot-msg').textContent = '';
+  document.getElementById('forgot-email').value = document.getElementById('auth-email').value.trim();
+  showAuthError('');
+}
+
+function showLoginPanel() {
+  document.getElementById('login-panel').style.display = 'block';
+  document.getElementById('forgot-panel').style.display = 'none';
+  document.getElementById('reset-panel').style.display = 'none';
+  document.getElementById('auth-title').textContent = 'Sign in';
+  document.getElementById('forgot-msg').textContent = '';
+  const rm = document.getElementById('reset-msg');
+  rm.style.display = 'none';
+  rm.textContent = '';
+}
+
+async function doForgotPassword() {
+  const msg = document.getElementById('forgot-msg');
+  msg.textContent = '';
+  msg.style.color = 'var(--muted)';
+  const email = document.getElementById('forgot-email').value.trim();
+  if (!email) {
+    msg.textContent = 'Enter your email.';
+    msg.style.color = 'var(--bad)';
+    return;
+  }
+  try {
+    const r = await fetch('/api/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      msg.style.color = 'var(--bad)';
+      msg.textContent = d.error || 'Request failed.';
+      return;
+    }
+    msg.style.color = 'var(--good)';
+    msg.textContent = d.message || 'If an account exists, check your email.';
+  } catch (e) {
+    msg.style.color = 'var(--bad)';
+    msg.textContent = 'Network error.';
+  }
+}
+
+function initResetFromUrl() {
+  const tok = new URLSearchParams(window.location.search).get('reset');
+  if (!tok) return;
+  document.getElementById('login-panel').style.display = 'none';
+  document.getElementById('forgot-panel').style.display = 'none';
+  document.getElementById('reset-panel').style.display = 'block';
+  document.getElementById('reset-token').value = tok;
+  document.getElementById('auth-title').textContent = 'Set new password';
+}
+
+async function doResetPassword() {
+  const msg = document.getElementById('reset-msg');
+  msg.style.display = 'none';
+  msg.textContent = '';
+  const token = document.getElementById('reset-token').value.trim();
+  const p1 = document.getElementById('reset-pass1').value;
+  const p2 = document.getElementById('reset-pass2').value;
+  if (p1.length < 8) {
+    msg.textContent = 'Password must be at least 8 characters.';
+    msg.style.display = 'block';
+    return;
+  }
+  if (p1 !== p2) {
+    msg.textContent = 'Passwords do not match.';
+    msg.style.display = 'block';
+    return;
+  }
+  try {
+    const r = await fetch('/api/auth/reset-password', {
+      ...fetchOpts,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, password: p1 }),
+    });
+    const d = await r.json();
+    if (!r.ok) {
+      msg.textContent = d.error || 'Reset failed.';
+      msg.style.display = 'block';
+      return;
+    }
+    window.history.replaceState({}, document.title, window.location.pathname);
+    document.getElementById('reset-pass1').value = '';
+    document.getElementById('reset-pass2').value = '';
+    await refreshSession();
+  } catch (e) {
+    msg.textContent = 'Network error.';
+    msg.style.display = 'block';
+  }
 }
 
 async function sendTestEmail(btn) {
@@ -405,13 +539,13 @@ function toggleForm() {
   const btn = document.getElementById('toggle-btn');
   const isOpen = !wrap.classList.contains('open');
   wrap.classList.toggle('open', isOpen);
-  btn.textContent = isOpen ? '× Close Form' : '+ Add Hotel';
+  btn.textContent = isOpen ? '× Close Form' : '+ Add Astral stay';
   if (isOpen) resetForm();
 }
 
 function cancelForm() {
   document.getElementById('form-wrap').classList.remove('open');
-  document.getElementById('toggle-btn').textContent = '+ Add Hotel';
+  document.getElementById('toggle-btn').textContent = '+ Add Astral stay';
   resetForm();
 }
 
@@ -471,7 +605,7 @@ async function saveTracker() {
   const editId = document.getElementById('f-edit-id').value;
 
   if (!label) return showFormError('Hotel name is required.');
-  if (!url) return showFormError('URL is required.');
+  if (!url) return showFormError('Astral booking URL is required.');
 
   const body = {
     label,
@@ -508,7 +642,7 @@ async function checkNow(id, btn) {
   btn.textContent = 'Checking...';
 
   const status = document.getElementById(`status-${id}`);
-  status.textContent = '';
+  status.textContent = 'Checking Astral price on server…';
   status.style.color = 'var(--muted)';
   const pkgWrap = document.getElementById(`packages-${id}`);
 
@@ -624,7 +758,7 @@ async function load() {
 
   const container = document.getElementById('trackers');
   if (!trackers.length) {
-    container.innerHTML = '<div class="tracker"><div class="muted">No hotels yet. Click "Add Hotel" to start.</div></div>';
+    container.innerHTML = '<div class="tracker"><div class="muted">No Astral stays yet. Click &quot;Add Astral stay&quot; and paste an astralhotels.co.il booking link.</div></div>';
     return;
   }
 

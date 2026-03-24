@@ -8,7 +8,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from flask import Flask, jsonify, request, send_from_directory, session
 
-from auth_helpers import login_required, login_user, register_user
+from astral_urls import astral_url_error_message, is_astral_booking_url
+from auth_helpers import (
+    complete_password_reset,
+    login_required,
+    login_user,
+    register_user,
+    start_password_reset,
+)
 from url_sanitize import sanitize_url as _sanitize_url
 from database import (
     delete_tracker,
@@ -51,10 +58,30 @@ def _user_id() -> str | None:
     return session.get("user_id")
 
 
+_PRIVATE_USER_KEYS = frozenset({"password_hash", "password_reset_token", "password_reset_expires"})
+
+
 def _public_user(u: dict | None) -> dict | None:
     if not u:
         return None
-    return {k: v for k, v in u.items() if k != "password_hash"}
+    return {k: v for k, v in u.items() if k not in _PRIVATE_USER_KEYS}
+
+
+def _request_base_url() -> str:
+    return (
+        (os.getenv("PUBLIC_APP_URL") or "").strip()
+        or (os.getenv("RENDER_EXTERNAL_URL") or "").strip()
+        or request.url_root.rstrip("/")
+    )
+
+
+def _ensure_astral_tracker_urls(data: dict) -> str | None:
+    if not is_astral_booking_url(data.get("url") or ""):
+        return astral_url_error_message()
+    for u in data.get("alternative_urls") or []:
+        if isinstance(u, str) and u.strip() and not is_astral_booking_url(u):
+            return astral_url_error_message()
+    return None
 
 
 def _to_bool(value) -> bool:
@@ -184,6 +211,38 @@ def auth_me():
     return jsonify({"user": u, **smtp})
 
 
+@app.route("/api/auth/forgot-password", methods=["POST"])
+def auth_forgot_password():
+    raw = request.json or {}
+    ok, err = start_password_reset(raw.get("email") or "", _request_base_url())
+    if not ok and err == "smtp_not_configured":
+        return jsonify(
+            {"error": "Password reset is unavailable: outgoing email (SMTP) is not configured on this server."}
+        ), 503
+    if not ok and err == "send_failed":
+        return jsonify({"error": "Could not send the reset email. Try again later."}), 502
+    return jsonify(
+        {
+            "message": "If an account exists for that email, we sent a reset link. Check your inbox and spam folder.",
+        }
+    )
+
+
+@app.route("/api/auth/reset-password", methods=["POST"])
+def auth_reset_password():
+    raw = request.json or {}
+    token = (raw.get("token") or "").strip()
+    password = raw.get("password") or ""
+    user, err = complete_password_reset(token, password)
+    if err:
+        return jsonify({"error": err}), 400
+    if not user:
+        return jsonify({"error": "Reset failed."}), 500
+    session["user_id"] = user["id"]
+    session.permanent = bool(os.getenv("PERMANENT_SESSION", "true").lower() in {"1", "true", "yes"})
+    return jsonify({"user": user})
+
+
 # --- App ---
 
 
@@ -221,6 +280,10 @@ def add_tracker():
     if date_error:
         return jsonify({"error": date_error}), 400
 
+    astral_err = _ensure_astral_tracker_urls(data)
+    if astral_err:
+        return jsonify({"error": astral_err}), 400
+
     try:
         upsert_tracker(data)
     except PermissionError as e:
@@ -246,6 +309,10 @@ def update_tracker(tid):
     date_error = _validate_dates(data.get("checkin"), data.get("checkout"))
     if date_error:
         return jsonify({"error": date_error}), 400
+
+    astral_err = _ensure_astral_tracker_urls(data)
+    if astral_err:
+        return jsonify({"error": astral_err}), 400
 
     try:
         upsert_tracker(data)
@@ -275,6 +342,9 @@ def check_now(tid):
     if not tracker:
         return jsonify({"error": "Tracker not found."}), 404
 
+    if not is_astral_booking_url(tracker.get("url") or ""):
+        return jsonify({"error": astral_url_error_message()}), 400
+
     check_url = build_tracking_url(tracker["url"], tracker.get("checkin"), tracker.get("checkout"))
     prev = get_last_price(tid, check_url)
 
@@ -285,9 +355,10 @@ def check_now(tid):
     )
 
     if price is None:
-        err = "Could not find a matching price for the same room/conditions at this link."
-        if "simplex-ltd.com" in (check_url or ""):
-            err = 'This site is currently protected by Cloudflare anti-bot challenge ("Click to reveal"). Automated price extraction is blocked right now.'
+        err = (
+            "Could not read a price from this Astral link for your filters. "
+            "Try adjusting meal / Stars / room options on the site, then copy the URL again."
+        )
         return jsonify(
             {
                 "error": err,
@@ -431,7 +502,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     start_scheduler(interval_minutes=interval)
     logger.info(
-        "[App] Hotel Price Tracker ready | supported: Astral, Dan, Fattal | checks every %s minutes",
+        "[App] Astral Hotels Price Tracker ready | Astral-only | checks every %s minutes",
         interval,
     )
     logger.info("[App] Open: http://%s:%s", host, port)

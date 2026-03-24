@@ -145,6 +145,10 @@ def scrape_price_and_packages(
     host = (urlparse(fixed_url).hostname or "").lower()
     is_astral = "astralhotels.co.il" in host
 
+    if not is_astral:
+        logger.warning("[Scraper] Non-Astral URL rejected (Astral-only app): %s", fixed_url[:120])
+        return None, []
+
     # Fast-path Astral via backend API (no browser). Includes Stars/club: API has
     # priceAfterClubMemberDiscount on each planMeal (browser path was unreliable for club).
     if is_astral:

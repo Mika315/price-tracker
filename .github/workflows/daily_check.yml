@@ -1,4 +1,4 @@
-name: Daily Price Check
+name: Daily Astral Price Check
 
 on:
   schedule:
@@ -21,10 +21,9 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
-      - name: Run tracker
+      - name: Run tracker (Astral-only URLs in config/trackers.json)
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
-          # User id from your SQLite `users` table (create account in app first). Required for multi-user DB.
           IMPORT_USER_ID: ${{ secrets.IMPORT_USER_ID }}
         run: python src/main.py

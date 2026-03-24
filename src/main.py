@@ -4,6 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from astral_urls import astral_url_error_message, is_astral_booking_url
 from database import init_db, upsert_tracker
 from tracker import run_all_trackers
 
@@ -30,5 +31,9 @@ if __name__ == "__main__":
     for t in load_config():
         t = dict(t)
         t["user_id"] = uid
+        if not is_astral_booking_url((t.get("url") or "").strip()):
+            print(astral_url_error_message(), file=sys.stderr)
+            print(f"Offending entry label={t.get('label')!r}", file=sys.stderr)
+            sys.exit(1)
         upsert_tracker(t)
     run_all_trackers()

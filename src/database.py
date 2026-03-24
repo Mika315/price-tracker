@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any
 
 from url_sanitize import sanitize_url
@@ -147,6 +148,8 @@ def init_db():
                       AND COALESCE(meal_plan, 'none') = 'none'
                     """
                 )
+            c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_token TEXT")
+            c.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_reset_expires TIMESTAMPTZ")
         logger.info("[DB] Initialized PostgreSQL at DATABASE_URL")
         return
 
@@ -209,6 +212,8 @@ def init_db():
         _ensure_column_sqlite(c, "trackers", "purchase_date", "TEXT")
         _ensure_column_sqlite(c, "trackers", "alternative_urls", "TEXT DEFAULT '[]'")
         _ensure_column_sqlite(c, "trackers", "user_id", "TEXT REFERENCES users(id) ON DELETE CASCADE")
+        _ensure_column_sqlite(c, "users", "password_reset_token", "TEXT")
+        _ensure_column_sqlite(c, "users", "password_reset_expires", "TEXT")
 
         cols = _column_names_sqlite(c, "trackers")
         if "require_breakfast" in cols:
@@ -245,6 +250,62 @@ def get_user_by_id(user_id: str) -> dict | None:
     with _conn() as c:
         row = c.execute(f"SELECT * FROM users WHERE id = {q}", (user_id,)).fetchone()
     return dict(row) if row else None
+
+
+def _parse_expires_value(val) -> datetime | None:
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        dt = val
+    else:
+        s = str(val).replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def set_password_reset_token(user_id: str, token: str, expires_at: datetime) -> None:
+    q = _ph()
+    exp_val: Any = expires_at
+    if not _use_postgres():
+        exp_val = expires_at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    with _conn() as c:
+        c.execute(
+            f"UPDATE users SET password_reset_token = {q}, password_reset_expires = {q} WHERE id = {q}",
+            (token, exp_val, user_id),
+        )
+
+
+def get_user_by_valid_reset_token(token: str) -> dict | None:
+    if not token:
+        return None
+    q = _ph()
+    with _conn() as c:
+        row = c.execute(f"SELECT * FROM users WHERE password_reset_token = {q}", (token,)).fetchone()
+    if not row:
+        return None
+    u = dict(row)
+    exp = _parse_expires_value(u.get("password_reset_expires"))
+    if exp is None or datetime.now(timezone.utc) > exp:
+        return None
+    return u
+
+
+def update_user_password_clear_reset(user_id: str, password_hash: str) -> None:
+    q = _ph()
+    with _conn() as c:
+        c.execute(
+            f"""
+            UPDATE users
+            SET password_hash = {q}, password_reset_token = NULL, password_reset_expires = NULL
+            WHERE id = {q}
+            """,
+            (password_hash, user_id),
+        )
 
 
 def _decode_tracker(row: Any) -> dict:

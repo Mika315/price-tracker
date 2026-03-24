@@ -70,6 +70,15 @@ def send_email(to_addr: str, subject: str, body: str) -> bool:
         return False
 
 
+def send_password_reset_email(to_addr: str, reset_url: str) -> bool:
+    body = (
+        "You asked to reset your password for Astral Hotels Price Tracker.\n\n"
+        f"Open this link to set a new password (valid for 1 hour):\n{reset_url}\n\n"
+        "If you did not request this, you can ignore this email.\n"
+    )
+    return send_email(to_addr, "Astral Hotels Price Tracker — password reset", body)
+
+
 def send_price_alert(
     label: str,
     current_price: float,
@@ -187,7 +196,7 @@ def send_test_notification_email(to_addr: str | None) -> bool:
     if to_addr and _smtp_configured():
         return send_email(
             to_addr,
-            "Hotel tracker: test email",
+            "Astral Hotels Price Tracker: test email",
             "Your email notifications are configured correctly.",
         )
     return False
@@ -196,8 +205,8 @@ def send_test_notification_email(to_addr: str | None) -> bool:
 def send_test_notification(topic: str | None = None):
     """Send a test ping to ntfy (legacy)."""
     _send_ntfy(
-        title="Hotel Tracker Connected",
-        message="Your price tracker is set up correctly and monitoring prices.",
+        title="Astral Hotels Price Tracker",
+        message="Your tracker is connected and monitoring Astral booking prices.",
         url=None,
         topic=topic,
         priority="default",
