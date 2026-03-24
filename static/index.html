@@ -118,7 +118,7 @@
   .btn { transition: transform .12s ease, filter .12s ease; }
   .btn:hover { transform: translateY(-1px); filter: brightness(1.02); }
 
-  .error { margin-top: 10px; display: none; background: #3b1d23; border: 1px solid #8e3d4b; padding: 10px; border-radius: 10px; color: #ffb3be; }
+  .error { margin-top: 10px; display: none; background: #3b1d23; border: 1px solid #8e3d4b; padding: 12px 14px; border-radius: 10px; color: #ffb3be; min-height: 48px; line-height: 1.45; }
 
   .tracker { padding: 14px; margin-bottom: 10px; }
   .tracker-top { display: flex; justify-content: space-between; gap: 8px; }
@@ -137,7 +137,12 @@
     margin-top: 10px;
     font-size: 13px;
     color: var(--muted);
-    min-height: 18px;
+    min-height: 3.2em;
+    line-height: 1.45;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.55);
+    border: 1px solid var(--line);
   }
 
   @media (max-width: 640px) {
@@ -285,6 +290,9 @@
 
 <script>
 const fetchOpts = { credentials: 'include' };
+/** After "Check now", delay list refresh so status/error text stays readable (ms). */
+const CHECK_OK_REFRESH_MS = 10000;
+const CHECK_ERROR_REFRESH_MS = 22000;
 
 /** Strip invisible Unicode from pasted URLs (mobile RTL / WhatsApp / email). Harmless for desktop copy-paste from the browser bar. */
 function sanitizePastedUrl(s) {
@@ -526,6 +534,9 @@ function showFormError(message) {
   const el = document.getElementById('form-error');
   el.textContent = message;
   el.style.display = 'block';
+  try {
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  } catch (e) { /* ignore */ }
 }
 
 function clearFormError() {
@@ -645,6 +656,7 @@ async function checkNow(id, btn) {
   status.textContent = 'Checking Astral price on server…';
   status.style.color = 'var(--muted)';
   const pkgWrap = document.getElementById(`packages-${id}`);
+  let refreshMs = CHECK_OK_REFRESH_MS;
 
   try {
     const response = await fetch(`/api/trackers/${id}/check`, { ...fetchOpts, method: 'POST' });
@@ -653,6 +665,7 @@ async function checkNow(id, btn) {
     if (!response.ok || data.error) {
       status.textContent = data.error || 'Check failed.';
       status.style.color = 'var(--bad)';
+      refreshMs = CHECK_ERROR_REFRESH_MS;
     } else {
       const prev = data.previous_price;
       const cur = data.currency || '₪';
@@ -713,11 +726,16 @@ async function checkNow(id, btn) {
   } catch (err) {
     status.textContent = 'Network error.';
     status.style.color = 'var(--bad)';
+    refreshMs = CHECK_ERROR_REFRESH_MS;
   }
+
+  try {
+    status.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  } catch (e) { /* ignore */ }
 
   btn.disabled = false;
   btn.textContent = 'Check Now';
-  load();
+  setTimeout(() => load(), refreshMs);
 }
 
 async function removeTracker(id) {
