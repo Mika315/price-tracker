@@ -79,6 +79,72 @@ def send_password_reset_email(to_addr: str, reset_url: str) -> bool:
     return send_email(to_addr, "Astral Hotels Price Tracker — password reset", body)
 
 
+def send_check_now_email(
+    *,
+    user_email: str | None,
+    label: str,
+    url: str,
+    currency: str,
+    current_price: float,
+    previous_price: float | None,
+    trend: str | None,
+) -> dict:
+    """
+    Manual "Check now" email. This is sent even when alert rules do not qualify,
+    to help users verify SMTP and see a friendly trend message.
+    """
+    result: dict = {
+        "smtp_configured": _smtp_configured(),
+        "email_sent": False,
+        "email_skip_reason": None,
+    }
+    if not user_email:
+        result["email_skip_reason"] = "no_user_email"
+        return result
+    if not _smtp_configured():
+        result["email_skip_reason"] = "smtp_not_configured"
+        return result
+
+    title = f"Astral price update: {label}"
+
+    if previous_price is None or trend is None:
+        headline = f"Baseline saved: {currency}{current_price:.2f}"
+        lines = [
+            headline,
+            "",
+            "This is your first successful check for this tracker.",
+            "Run Check now again later to see if the price changed.",
+            "",
+            f"Open: {url}",
+        ]
+    else:
+        if trend == "down":
+            headline = f"Good news — price dropped to {currency}{current_price:.2f}"
+        elif trend == "up":
+            headline = f"Heads up — price increased to {currency}{current_price:.2f}"
+        else:
+            headline = f"No change — still {currency}{current_price:.2f}"
+
+        delta = current_price - previous_price
+        sign = "+" if delta > 0 else ""
+        lines = [
+            headline,
+            "",
+            f"Previous: {currency}{previous_price:.2f}",
+            f"Current:  {currency}{current_price:.2f}",
+            f"Change:   {sign}{currency}{delta:.2f}",
+            "",
+            f"Open: {url}",
+        ]
+
+    body = "\n".join(lines)
+    if send_email(user_email, title, body):
+        result["email_sent"] = True
+    else:
+        result["email_skip_reason"] = "send_failed"
+    return result
+
+
 def send_price_alert(
     label: str,
     current_price: float,

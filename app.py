@@ -28,7 +28,13 @@ from database import (
     save_price,
     upsert_tracker,
 )
-from notifier import get_smtp_status, send_price_alert, send_test_notification, send_test_notification_email
+from notifier import (
+    get_smtp_status,
+    send_check_now_email,
+    send_price_alert,
+    send_test_notification,
+    send_test_notification_email,
+)
 from scheduler import (
     _alert_baseline,
     alert_kind_for_tracker,
@@ -379,49 +385,33 @@ def check_now(tid):
         else ("down" if price < prev else "up" if price > prev else "same")
     )
 
+    # Scheduled alerts use the alert rules; manual Check Now always sends a "result" email
+    # (when SMTP is configured) so users can verify delivery.
     blocker = explain_price_alert_blocker(tracker, baseline_price, price, prev, threshold_pct)
+    u = get_user_by_id(uid)
+    user_email = (u or {}).get("email")
+    check_mail = send_check_now_email(
+        user_email=user_email,
+        label=tracker.get("label") or tracker.get("url") or tid,
+        url=check_url,
+        currency=tracker.get("currency", "₪"),
+        current_price=float(price),
+        previous_price=prev,
+        trend=trend,
+    )
     notification: dict = {
         "eligible": blocker is None,
         "blocker": blocker,
         "email_sent": False,
         **get_smtp_status(),
         "email_skip_reason": None,
+        "check_email_sent": bool(check_mail.get("email_sent")),
+        "check_email_skip_reason": check_mail.get("email_skip_reason"),
     }
-
-    if blocker is None:
-        u = get_user_by_id(uid)
-        user_email = (u or {}).get("email")
-        ntfy_topic = (tracker.get("ntfy_topic") or "").strip() or None
-        kind = alert_kind_for_tracker(tracker)
-        savings_val = (
-            round(baseline_price - price, 2)
-            if kind == "drop" and baseline_price > 0
-            else None
-        )
-        mail_info = send_price_alert(
-            label=tracker.get("label") or tracker.get("url") or tid,
-            current_price=price,
-            currency=tracker.get("currency", "₪"),
-            url=check_url,
-            alert_kind=kind,
-            reference_price=baseline_price if baseline_price > 0 else None,
-            previous_price=prev,
-            savings=savings_val,
-            comparison_label=comparison_label,
-            packages=packages,
-            user_email=user_email,
-            ntfy_topic=ntfy_topic,
-        )
-        notification["email_sent"] = bool(mail_info.get("email_sent"))
-        notification["smtp_configured"] = bool(mail_info.get("smtp_configured"))
-        notification["email_skip_reason"] = mail_info.get("email_skip_reason")
-        if mail_info.get("email_sent"):
-            logger.info("[Check now] Price alert email sent for tracker %s (%s)", tid, kind)
-        else:
-            logger.warning(
-                "[Check now] Alert qualified but email not sent (%s)",
-                mail_info.get("email_skip_reason"),
-            )
+    if notification["check_email_sent"]:
+        logger.info("[Check now] Result email sent for tracker %s", tid)
+    elif notification.get("check_email_skip_reason"):
+        logger.warning("[Check now] Result email not sent (%s)", notification.get("check_email_skip_reason"))
 
     return jsonify(
         {
