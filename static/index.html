@@ -130,27 +130,92 @@
   .tag-reserve { background: #fff3e6; border-color: #ffd9b3; color: #9a3412; }
   .tag-club { background: #ecfff3; border-color: #bff3d0; color: #0f766e; }
   .tag-threshold { background: #f3e8ff; border-color: #e7d2fe; color: #6d28d9; }
-  .pkg-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
-  .pkg-toggle {
+  .pkg-bar { margin-top: 10px; }
+  .pkg-open-btn {
     width: 100%;
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 10px;
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: 10px 12px;
-    background: #eaf3ff;
+    padding: 10px 14px;
+    background: #ffffff;
     color: #0b4f71;
     font-weight: 700;
     font-size: 14px;
     cursor: pointer;
     text-align: left;
+    box-shadow: 0 2px 8px rgba(14, 165, 233, 0.12);
   }
-  .pkg-toggle:hover { filter: brightness(0.98); }
-  .pkg-chevron { font-size: 18px; font-weight: 800; width: 1.2em; text-align: center; line-height: 1; }
-  .pkg-wrap-inner { margin-top: 8px; display: none; }
-  .pkg-wrap-inner.open { display: block; }
-  .pkg { border: 1px solid #d9e7f7; border-radius: 10px; padding: 8px; margin-bottom: 6px; background: #f7fbff; }
+  .pkg-open-btn:hover { background: #f0f9ff; border-color: rgba(14, 165, 233, 0.45); }
+  .pkg-count {
+    font-size: 12px;
+    font-weight: 800;
+    background: #e0f2fe;
+    color: #0369a1;
+    padding: 4px 10px;
+    border-radius: 999px;
+  }
+  .modal-root {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0;
+  }
+  .modal-root.open { display: flex; }
+  .modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.48);
+  }
+  .modal-dialog {
+    position: relative;
+    z-index: 1;
+    width: min(100%, 520px);
+    max-height: min(82vh, 680px);
+    margin: auto 12px 12px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 24px 60px rgba(2, 132, 199, 0.22);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  @media (min-width: 640px) {
+    .modal-root { align-items: center; padding: 16px; }
+    .modal-dialog { margin: auto; max-height: 80vh; }
+  }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .modal-title { margin: 0; font-size: 17px; font-weight: 800; line-height: 1.3; }
+  .modal-minimize {
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: #eaf3ff;
+    color: #0b4f71;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .modal-minimize:hover { filter: brightness(0.97); }
+  .modal-body { overflow-y: auto; padding: 12px 16px 20px; -webkit-overflow-scrolling: touch; }
+  .pkg { border: 1px solid #d9e7f7; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: #f7fbff; }
 
   .status {
     margin-top: 10px;
@@ -307,13 +372,23 @@
   <div id="trackers"></div>
   </div><!-- /#app-main -->
 
+<div id="room-modal" class="modal-root" aria-hidden="true">
+  <div class="modal-backdrop" onclick="closeRoomModal()"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="room-modal-heading" onclick="event.stopPropagation()">
+    <div class="modal-head">
+      <h3 id="room-modal-heading" class="modal-title">Room options</h3>
+      <button type="button" class="modal-minimize" onclick="closeRoomModal()" title="Minimize" aria-label="Close">−</button>
+    </div>
+    <div id="room-modal-body" class="modal-body"></div>
+  </div>
+</div>
+
 <script>
 const fetchOpts = { credentials: 'include' };
 /** After "Check now", delay list refresh so status/error text stays readable (ms). */
 const CHECK_OK_REFRESH_MS = 10000;
 const CHECK_ERROR_REFRESH_MS = 22000;
-const PKG_CACHE_KEY = 'pkgCache_v1_';
-const PKG_OPEN_KEY = 'pkgOpen_v1_';
+const PKG_CACHE_KEY = 'pkgCache_v2_';
 
 /** Strip invisible Unicode from pasted URLs (mobile RTL / WhatsApp / email). Harmless for desktop copy-paste from the browser bar. */
 function sanitizePastedUrl(s) {
@@ -676,8 +751,6 @@ async function checkNow(id, btn) {
   const status = document.getElementById(`status-${id}`);
   status.textContent = 'Checking Astral price on server…';
   status.style.color = 'var(--muted)';
-  const pkgSection = document.getElementById(`pkg-section-${id}`);
-  const pkgInner = document.getElementById(`packages-${id}`);
   let refreshMs = CHECK_OK_REFRESH_MS;
 
   try {
@@ -732,13 +805,8 @@ async function checkNow(id, btn) {
 
       if (data.packages && data.packages.length) {
         const cur = data.currency || '₪';
-        savePackagesCache(id, cur, data.packages);
-        setPkgSectionOpen(id, true);
-        if (pkgSection) pkgSection.style.display = 'block';
-        if (pkgInner) {
-          pkgInner.innerHTML = renderPackagesHtml(cur, data.packages);
-          syncPackageToggleUi(id, true);
-        }
+        savePackagesCache(id, cur, data.packages, getTrackerLabelFromDom(id));
+        applyPackagePanelForTracker(id);
       }
     }
   } catch (err) {
@@ -772,11 +840,16 @@ function mealLabel(mealPlan) {
   }[mealPlan || 'none'];
 }
 
-function savePackagesCache(trackerId, currency, packages) {
+function savePackagesCache(trackerId, currency, packages, label) {
   try {
     sessionStorage.setItem(
       PKG_CACHE_KEY + trackerId,
-      JSON.stringify({ currency: currency || '₪', packages: packages || [], savedAt: Date.now() }),
+      JSON.stringify({
+        currency: currency || '₪',
+        packages: packages || [],
+        label: label || '',
+        savedAt: Date.now(),
+      }),
     );
   } catch (e) { /* quota / private mode */ }
 }
@@ -796,18 +869,28 @@ function loadPackagesCache(trackerId) {
 function clearPackagesCache(trackerId) {
   try {
     sessionStorage.removeItem(PKG_CACHE_KEY + trackerId);
-    sessionStorage.removeItem(PKG_OPEN_KEY + trackerId);
   } catch (e) { /* ignore */ }
 }
 
-function isPkgSectionOpen(trackerId) {
-  return sessionStorage.getItem(PKG_OPEN_KEY + trackerId) === '1';
+function openRoomModal(trackerId) {
+  const cached = loadPackagesCache(trackerId);
+  if (!cached || !cached.packages || !cached.packages.length) return;
+  const label = (cached.label || '').trim();
+  const hotel = label ? ` — ${label}` : '';
+  document.getElementById('room-modal-heading').textContent = `Room options${hotel}`;
+  document.getElementById('room-modal-body').innerHTML = renderPackagesHtml(cached.currency, cached.packages);
+  const root = document.getElementById('room-modal');
+  root.classList.add('open');
+  root.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
 }
 
-function setPkgSectionOpen(trackerId, open) {
-  try {
-    sessionStorage.setItem(PKG_OPEN_KEY + trackerId, open ? '1' : '0');
-  } catch (e) { /* ignore */ }
+function closeRoomModal() {
+  const root = document.getElementById('room-modal');
+  if (!root) return;
+  root.classList.remove('open');
+  root.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
 }
 
 function escHtml(s) {
@@ -816,6 +899,15 @@ function escHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function escAttr(s) {
+  return escHtml(s);
+}
+
+function getTrackerLabelFromDom(trackerId) {
+  const el = document.querySelector(`[data-tid="${trackerId}"]`);
+  return el ? (el.getAttribute('data-label') || '').trim() : '';
 }
 
 function renderPackagesHtml(currency, packages) {
@@ -833,42 +925,17 @@ function renderPackagesHtml(currency, packages) {
   `).join('');
 }
 
-function syncPackageToggleUi(trackerId, open) {
-  const inner = document.getElementById(`packages-${trackerId}`);
-  const btn = document.getElementById(`pkg-toggle-${trackerId}`);
-  if (inner) {
-    inner.classList.toggle('open', open);
-  }
-  if (btn) {
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    const t = btn.querySelector('.pkg-toggle-text');
-    const c = btn.querySelector('.pkg-chevron');
-    if (t) t.textContent = open ? 'Hide room options' : 'Show room options';
-    if (c) c.textContent = open ? '−' : '+';
-  }
-}
-
 function applyPackagePanelForTracker(trackerId) {
-  const section = document.getElementById(`pkg-section-${trackerId}`);
+  const bar = document.getElementById(`pkg-bar-${trackerId}`);
+  const countEl = document.getElementById(`pkg-count-${trackerId}`);
   const cached = loadPackagesCache(trackerId);
-  if (!section) return;
-  if (!cached) {
-    section.style.display = 'none';
+  if (!bar) return;
+  if (!cached || !cached.packages || !cached.packages.length) {
+    bar.style.display = 'none';
     return;
   }
-  section.style.display = 'block';
-  const inner = document.getElementById(`packages-${trackerId}`);
-  if (inner) inner.innerHTML = renderPackagesHtml(cached.currency, cached.packages);
-  const open = isPkgSectionOpen(trackerId);
-  syncPackageToggleUi(trackerId, open);
-}
-
-function togglePackages(trackerId) {
-  const cached = loadPackagesCache(trackerId);
-  if (!cached) return;
-  const next = !isPkgSectionOpen(trackerId);
-  setPkgSectionOpen(trackerId, next);
-  syncPackageToggleUi(trackerId, next);
+  bar.style.display = 'block';
+  if (countEl) countEl.textContent = String(cached.packages.length);
 }
 
 /** Baseline for “cheaper than” / stats: paid_price only. */
@@ -908,7 +975,7 @@ async function load() {
       : '';
 
     return `
-      <div class="tracker">
+      <div class="tracker" data-tid="${t.id}" data-label="${escAttr(t.label || '')}">
         <div class="tracker-top">
           <div>
             <div><strong>${t.label || 'Unnamed tracker'}</strong></div>
@@ -935,12 +1002,11 @@ async function load() {
         </div>
 
         <div id="status-${t.id}" class="status"></div>
-        <div id="pkg-section-${t.id}" class="pkg-section" style="display:none">
-          <button type="button" class="pkg-toggle" id="pkg-toggle-${t.id}" onclick="togglePackages('${t.id}')" aria-expanded="false">
-            <span class="pkg-chevron">+</span>
-            <span class="pkg-toggle-text">Show room options</span>
+        <div id="pkg-bar-${t.id}" class="pkg-bar" style="display:none">
+          <button type="button" class="pkg-open-btn" onclick="openRoomModal('${t.id}')">
+            <span>View room options</span>
+            <span id="pkg-count-${t.id}" class="pkg-count">0</span>
           </button>
-          <div id="packages-${t.id}" class="pkg-wrap-inner"></div>
         </div>
       </div>
     `;
@@ -965,6 +1031,10 @@ fUrl.addEventListener('paste', function (e) {
   el.value = el.value.slice(0, start) + cleaned + el.value.slice(end);
   const pos = start + cleaned.length;
   el.setSelectionRange(pos, pos);
+});
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') closeRoomModal();
 });
 </script>
 </body>

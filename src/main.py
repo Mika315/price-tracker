@@ -21,6 +21,10 @@ def load_config():
 
 if __name__ == "__main__":
     init_db()
+    cfg = load_config()
+    if not cfg:
+        print("No trackers in config/trackers.json — skipping scheduled check.")
+        sys.exit(0)
     uid = os.getenv("IMPORT_USER_ID", "").strip()
     if not uid:
         print(
@@ -28,7 +32,7 @@ if __name__ == "__main__":
             file=sys.stderr,
         )
         sys.exit(1)
-    for t in load_config():
+    for t in cfg:
         t = dict(t)
         t["user_id"] = uid
         if not is_astral_booking_url((t.get("url") or "").strip()):

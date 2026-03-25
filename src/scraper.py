@@ -331,6 +331,86 @@ def _fetch_page(url: str, selector: str | None = None, requirements: dict | None
         return None, None
 
 
+def _looks_like_astral_internal_room_code(s: str) -> bool:
+    """API sometimes returns internal codes like '171SuperSu' instead of the site label."""
+    s = (s or "").strip()
+    if len(s) < 4:
+        return False
+    return bool(re.match(r"^\d{2,}[A-Za-z]", s))
+
+
+def _astral_display_room_name(
+    room: dict,
+    rp: dict,
+    offer: dict,
+    pm: dict,
+    room_category: str,
+    plan_code: str,
+) -> str:
+    """
+    Prefer human-readable room + meal labels from Astral SearchRooms JSON
+    (room names, descriptions) over short internal roomCategory codes.
+    """
+    collected: list[str] = []
+
+    def _take(d: dict, *keys: str) -> str:
+        for k in keys:
+            v = (d.get(k) or "").strip()
+            if not v:
+                continue
+            if _looks_like_astral_internal_room_code(v):
+                continue
+            return v
+        return ""
+
+    for chunk in (
+        _take(room, "roomName", "name", "roomDescription", "description", "roomTitle"),
+        _take(rp, "roomName", "roomDescription", "roomCategoryName", "roomTitle"),
+        _take(offer, "roomName", "description", "title"),
+    ):
+        if chunk:
+            collected.append(chunk)
+            break
+
+    if not collected and room_category:
+        rc = room_category.strip()
+        if not _looks_like_astral_internal_room_code(rc):
+            collected.append(rc)
+        elif (offer.get("description") or "").strip():
+            collected.append((offer.get("description") or "").strip()[:120])
+
+    room_line = collected[0] if collected else (room_category or "").strip() or "Room"
+
+    meal_label = (
+        (pm.get("planName") or "").strip()
+        or (pm.get("planDescription") or "").strip()
+        or (pm.get("mealPlanDescription") or "").strip()
+    )
+    if not meal_label:
+        pc = (plan_code or "").strip().lower()
+        meal_label = {
+            "b/b": "Bed & breakfast",
+            "bb": "Bed & breakfast",
+            "h/b": "Half board",
+            "hb": "Half board",
+            "f/b": "Full board",
+            "fb": "Full board",
+        }.get(pc, "")
+    if not meal_label:
+        pid = (pm.get("planId") or "").strip()
+        if pid and not pid.isdigit() and not _looks_like_astral_internal_room_code(pid):
+            meal_label = pid
+
+    if _looks_like_astral_internal_room_code(room_line):
+        od = (offer.get("description") or "").strip()
+        if od:
+            room_line = od[:160]
+
+    if meal_label:
+        return f"{room_line} — {meal_label}"
+    return room_line
+
+
 def _scrape_astral_via_api(url: str, req: dict) -> tuple[float | None, list[dict]]:
     """
     Fast-path Astral extraction using their backend API.
@@ -433,7 +513,6 @@ def _scrape_astral_via_api(url: str, req: dict) -> tuple[float | None, list[dict
 
                     for pm in offer.get("planMeals") or []:
                         plan_code = (pm.get("planCode") or "").strip().lower()
-                        plan_name = (pm.get("planId") or "").strip()
                         # Astral returns B/B, priceAfterInternetDiscount, and for Stars members
                         # priceAfterClubMemberDiscount (breakfast + club is this row — do not use internet-only).
                         club_only = bool(req.get("club_membership_only"))
@@ -457,9 +536,13 @@ def _scrape_astral_via_api(url: str, req: dict) -> tuple[float | None, list[dict
                         except (TypeError, ValueError):
                             continue
 
+                        plan_name = (pm.get("planId") or "").strip()
+                        display_name = _astral_display_room_name(
+                            room, rp, offer, pm, room_category, plan_code
+                        )
                         pkg = RoomPackage(
                             price=price_val,
-                            room_name=(room_category or plan_name or "").strip(),
+                            room_name=display_name,
                             breakfast=plan_code in {"b/b", "bb"} or "ארוחת בוקר" in plan_name,
                             half_board=plan_code in {"h/b", "hb"} or "חצי" in plan_name,
                             full_board=plan_code in {"f/b", "fb"} or "מלא" in plan_name,
