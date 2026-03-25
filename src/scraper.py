@@ -484,15 +484,21 @@ def _scrape_astral_via_api(url: str, req: dict) -> tuple[float | None, list[dict
         return None, []
 
     meal_plan = (req.get("meal_plan") or "none").lower()
-    desired_codes = {
-        "breakfast": {"b/b", "bb"},
-        "half_board": {"h/b", "hb"},
-        "full_board": {"f/b", "fb"},
-        "none": set(),
-    }.get(meal_plan, set())
+    # Meal fallback: if the requested plan does not exist for the stay, fall back to the next
+    # best available (full_board -> half_board -> breakfast -> any).
+    meal_code_groups: list[set[str]] = []
+    if meal_plan == "full_board":
+        meal_code_groups = [{"f/b", "fb"}, {"h/b", "hb"}, {"b/b", "bb"}, set()]
+    elif meal_plan == "half_board":
+        meal_code_groups = [{"h/b", "hb"}, {"b/b", "bb"}, set()]
+    elif meal_plan == "breakfast":
+        meal_code_groups = [{"b/b", "bb"}, set()]
+    else:
+        meal_code_groups = [set()]
 
     best_price: float | None = None
     packages: list[dict] = []
+    candidates: list[dict] = []
 
     hotels = ((data.get("body") or {}).get("hotels") or []) if isinstance(data, dict) else []
     for hotel in hotels:
@@ -504,21 +510,21 @@ def _scrape_astral_via_api(url: str, req: dict) -> tuple[float | None, list[dict
                     desc = (offer.get("description") or "").strip()
                     reserve_hit = _has_reserve_duty(f"{price_code}\n{desc}")
                     reserve_only = bool(req.get("reserve_duty_only"))
-                    if reserve_only and not reserve_hit:
-                        # Tracker wants Miluim-only, but this offer is not a Miluim promo.
-                        continue
-                    if not reserve_only and reserve_hit:
+                    if (not reserve_only) and reserve_hit:
                         # Tracker is normal (no duty), skip Miluim-only promos.
                         continue
 
                     for pm in offer.get("planMeals") or []:
                         plan_code = (pm.get("planCode") or "").strip().lower()
-                        # Astral returns B/B, priceAfterInternetDiscount, and for Stars members
-                        # priceAfterClubMemberDiscount (breakfast + club is this row — do not use internet-only).
                         club_only = bool(req.get("club_membership_only"))
+                        has_club_price = pm.get("priceAfterClubMemberDiscount") is not None
+
+                        # Prefer club price when requested; fall back to normal price if club is unavailable.
                         raw_price = None
-                        if club_only:
+                        used_club = False
+                        if club_only and has_club_price:
                             raw_price = pm.get("priceAfterClubMemberDiscount")
+                            used_club = True
                         if raw_price is None:
                             raw_price = (
                                 pm.get("priceAfterInternetDiscount")
@@ -526,9 +532,6 @@ def _scrape_astral_via_api(url: str, req: dict) -> tuple[float | None, list[dict
                                 else pm.get("basePrice")
                             )
                         if raw_price is None:
-                            continue
-
-                        if desired_codes and plan_code not in desired_codes:
                             continue
 
                         try:
@@ -549,13 +552,56 @@ def _scrape_astral_via_api(url: str, req: dict) -> tuple[float | None, list[dict
                             reserve_duty=reserve_hit,
                             raw_text=(f"{room_category}\n{price_code}\n{plan_code}\n{plan_name}\n{desc}")[:1000],
                         )
-                        packages.append(_pkg_to_dict(pkg))
-
-                        if best_price is None or price_val < best_price:
-                            best_price = price_val
+                        candidates.append(
+                            {
+                                "pkg": _pkg_to_dict(pkg),
+                                "price": price_val,
+                                "plan_code": plan_code,
+                                "reserve_hit": reserve_hit,
+                                "used_club": used_club,
+                            }
+                        )
 
     if best_price is None:
+        # We'll compute best_price after applying fallbacks below.
+        pass
+
+    if not candidates:
         return None, []
+
+    # Fallback for reserve duty: if "reserve only" yields no offers, return normal price.
+    reserve_only = bool(req.get("reserve_duty_only"))
+    if reserve_only:
+        reserve_candidates = [c for c in candidates if c["reserve_hit"]]
+        if reserve_candidates:
+            candidates = reserve_candidates
+
+    # Fallback for club membership: if club is requested but no club price exists, return normal price.
+    club_only = bool(req.get("club_membership_only"))
+    if club_only:
+        club_candidates = [c for c in candidates if c["used_club"]]
+        if club_candidates:
+            candidates = club_candidates
+
+    # Meal-plan fallback by groups.
+    filtered: list[dict] = []
+    for group in meal_code_groups:
+        if not group:
+            filtered = candidates
+            break
+        subset = [c for c in candidates if c["plan_code"] in group]
+        if subset:
+            filtered = subset
+            break
+
+    if not filtered:
+        filtered = candidates
+
+    best_price = min((c["price"] for c in filtered), default=None)
+    if best_price is None:
+        return None, []
+
+    packages = [c["pkg"] for c in filtered]
 
     # Keep only a few packages to avoid huge payloads.
     packages = sorted(packages, key=lambda p: p.get("price") or 1e18)[:8]

@@ -372,6 +372,12 @@ def check_now(tid):
     comparison_label = "You paid"
     threshold_pct = float(tracker.get("threshold_pct") or 0)
     drop_pct = ((baseline_price - price) / baseline_price * 100) if baseline_price > 0 else 0
+    delta = (price - prev) if prev is not None else None
+    trend = (
+        None
+        if prev is None
+        else ("down" if price < prev else "up" if price > prev else "same")
+    )
 
     blocker = explain_price_alert_blocker(tracker, baseline_price, price, prev, threshold_pct)
     notification: dict = {
@@ -421,6 +427,8 @@ def check_now(tid):
         {
             "price": price,
             "previous_price": prev,
+            "delta": delta,
+            "trend": trend,
             "paid_price": tracker.get("paid_price"),
             "currency": tracker.get("currency", "₪"),
             "packages": packages,
