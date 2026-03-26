@@ -803,7 +803,7 @@ async function checkNow(id, btn) {
         status.style.color = 'var(--muted)';
       }
 
-      // Manual Check Now email (always attempted when SMTP is configured).
+      // Manual Check Now email: sent only if price changed vs what the user paid.
       if (n.check_email_sent) {
         status.textContent += ' — Check-now email sent.';
       } else if (n.check_email_skip_reason) {
@@ -813,6 +813,10 @@ async function checkNow(id, btn) {
             ? 'Check-now email not sent: sending failed (see server logs).'
             : n.check_email_skip_reason === 'no_user_email'
               ? 'Check-now email not sent: account has no email.'
+              : n.check_email_skip_reason === 'no_paid_price'
+                ? 'Check-now email not sent: add "Price paid" in the tracker to enable paid-price comparison.'
+                : n.check_email_skip_reason === 'no_price_change'
+                  ? 'Check-now email not sent: price is unchanged vs what you paid.'
               : 'Check-now email not sent.';
         status.textContent += ' — ' + r;
       }

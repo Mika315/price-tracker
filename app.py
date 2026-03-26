@@ -385,28 +385,46 @@ def check_now(tid):
         else ("down" if price < prev else "up" if price > prev else "same")
     )
 
-    # Scheduled alerts use the alert rules; manual Check Now always sends a "result" email
-    # (when SMTP is configured) so users can verify delivery.
+    # Scheduled alerts use the alert rules.
+    # Manual "Check Now" emails are for testing: send only if price changed vs what the user paid.
     blocker = explain_price_alert_blocker(tracker, baseline_price, price, prev, threshold_pct)
     u = get_user_by_id(uid)
     user_email = (u or {}).get("email")
-    check_mail = send_check_now_email(
-        user_email=user_email,
-        label=tracker.get("label") or tracker.get("url") or tid,
-        url=check_url,
-        currency=tracker.get("currency", "₪"),
-        current_price=float(price),
-        previous_price=prev,
-        trend=trend,
+
+    smtp_status = get_smtp_status()
+    paid_price = baseline_price if baseline_kind == "paid" else None
+    paid_changed = (
+        paid_price is not None and abs(float(price) - float(paid_price)) >= 0.01
     )
+
+    check_mail: dict | None = None
+    check_email_skip_reason: str | None = None
+    if not smtp_status.get("smtp_configured"):
+        check_email_skip_reason = "smtp_not_configured"
+    elif paid_price is None:
+        check_email_skip_reason = "no_paid_price"
+    elif not paid_changed:
+        check_email_skip_reason = "no_price_change"
+    else:
+        trend_vs_paid = "down" if float(price) < float(paid_price) else "up"
+        check_mail = send_check_now_email(
+            user_email=user_email,
+            label=tracker.get("label") or tracker.get("url") or tid,
+            url=check_url,
+            currency=tracker.get("currency", "₪"),
+            current_price=float(price),
+            previous_price=float(paid_price),
+            trend=trend_vs_paid,
+        )
+
     notification: dict = {
         "eligible": blocker is None,
         "blocker": blocker,
         "email_sent": False,
-        **get_smtp_status(),
+        **smtp_status,
         "email_skip_reason": None,
-        "check_email_sent": bool(check_mail.get("email_sent")),
-        "check_email_skip_reason": check_mail.get("email_skip_reason"),
+        "check_email_sent": bool((check_mail or {}).get("email_sent")),
+        "check_email_skip_reason": (check_mail or {}).get("email_skip_reason") or check_email_skip_reason,
     }
     if notification["check_email_sent"]:
         logger.info("[Check now] Result email sent for tracker %s", tid)
