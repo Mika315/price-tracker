@@ -134,7 +134,7 @@ def send_email_with_reason(to_addr: str, subject: str, body: str) -> tuple[bool,
             try:
                 if SMTP_USE_TLS:
                     ctx = ssl.create_default_context()
-                    smtp.starttls(context=ctx, server_hostname=SMTP_HOST)
+                    smtp.starttls(context=ctx)
                 smtp.login(SMTP_USER, SMTP_PASSWORD)
                 smtp.send_message(msg)
             finally:
