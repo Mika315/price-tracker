@@ -28,6 +28,7 @@ SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() in {"1", "true", "yes",
 # Port 465 typically uses implicit TLS (SMTP_SSL); 587 uses STARTTLS.
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() in {"1", "true", "yes", "on"} or SMTP_PORT == 465
 MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER or "").strip()
+SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "60"))
 
 
 def _smtp_configured() -> bool:
@@ -109,6 +110,31 @@ def _connect_smtp_ipv4(host: str, port: int, timeout: int = 30) -> smtplib.SMTP:
     raise last_err or OSError("Could not connect to SMTP server.")
 
 
+def _connect_smtp_ssl_ipv4(host: str, port: int, timeout: int = 30) -> smtplib.SMTP_SSL:
+    """
+    Connect using IPv4 only with implicit TLS (port 465).
+    """
+    ctx = ssl.create_default_context()
+    infos = socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
+    last_err: Exception | None = None
+    for _family, _socktype, _proto, _canonname, sockaddr in infos:
+        try:
+            sock = socket.create_connection(sockaddr, timeout=timeout)
+            smtp_ssl = smtplib.SMTP_SSL(host=host, port=port, timeout=timeout, context=ctx)
+            # replace the socket that SMTP_SSL created with our IPv4-connected socket
+            smtp_ssl.sock = ctx.wrap_socket(sock, server_hostname=host)
+            smtp_ssl.file = smtp_ssl.sock.makefile("rb")
+            smtp_ssl.host = host
+            return smtp_ssl
+        except Exception as e:
+            last_err = e
+            try:
+                smtp_ssl.quit()
+            except Exception:
+                pass
+            continue
+    raise last_err or OSError("Could not connect to SMTP SSL server.")
+
 def send_email_with_reason(to_addr: str, subject: str, body: str) -> tuple[bool, str | None]:
     """Send email and return (ok, reason_code_when_failed)."""
     if not _smtp_configured():
@@ -126,11 +152,17 @@ def send_email_with_reason(to_addr: str, subject: str, body: str) -> tuple[bool,
 
     try:
         if SMTP_USE_SSL:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+            smtp = _connect_smtp_ssl_ipv4(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS)
+            try:
                 smtp.login(SMTP_USER, SMTP_PASSWORD)
                 smtp.send_message(msg)
+            finally:
+                try:
+                    smtp.quit()
+                except Exception:
+                    pass
         else:
-            smtp = _connect_smtp_ipv4(SMTP_HOST, SMTP_PORT, timeout=30)
+            smtp = _connect_smtp_ipv4(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS)
             try:
                 if SMTP_USE_TLS:
                     ctx = ssl.create_default_context()
