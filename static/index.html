@@ -424,8 +424,8 @@ async function refreshSession() {
     document.getElementById('user-email').textContent = user.email;
     const smtpOk = !!data.smtp_configured;
     document.getElementById('smtp-line').textContent = smtpOk
-      ? 'Email alerts: server SMTP is configured (use “Send test email” to verify).'
-      : 'Email alerts: SMTP is not configured on the server — price emails cannot be sent until you set SMTP_* variables on Render (or your host).';
+      ? 'Email alerts are connected. You can send a test email now.'
+      : 'Email alerts are not connected yet, so the app cannot send emails right now.';
     document.getElementById('test-email-msg').textContent = '';
     appMain.classList.add('visible');
     showAuthError('');
@@ -591,19 +591,8 @@ async function sendTestEmail(btn) {
       body: '{}',
     });
     const d = await r.json();
-    if (d.email_sent) {
-      msg.style.color = 'var(--good)';
-      msg.textContent = 'Test email sent — check your inbox and spam folder.';
-    } else if (d.email_skip_reason === 'smtp_not_configured') {
-      msg.style.color = 'var(--bad)';
-      msg.textContent = d.hint || 'Configure SMTP on the server.';
-    } else if (d.email_skip_reason === 'send_failed') {
-      msg.style.color = 'var(--bad)';
-      msg.textContent = 'SMTP is set but sending failed — check Render logs and provider settings (app password, MAIL_FROM).';
-    } else {
-      msg.style.color = 'var(--bad)';
-      msg.textContent = 'Test email was not sent.';
-    }
+    msg.style.color = d.email_sent ? 'var(--good)' : 'var(--bad)';
+    msg.textContent = d.email_user_message || (d.email_sent ? 'Test email sent.' : 'Could not send test email.');
   } catch (e) {
     msg.style.color = 'var(--bad)';
     msg.textContent = 'Request failed. Try again.';
@@ -808,9 +797,19 @@ async function checkNow(id, btn) {
         status.textContent += ' — Check-now email sent.';
       } else if (n.check_email_skip_reason) {
         const r = n.check_email_skip_reason === 'smtp_not_configured'
-          ? 'Check-now email not sent: SMTP is not configured.'
-          : n.check_email_skip_reason === 'send_failed'
-            ? 'Check-now email not sent: sending failed (see server logs).'
+          ? 'Check-now email not sent: email sending is not connected yet.'
+          : n.check_email_skip_reason === 'auth_failed'
+            ? 'Check-now email not sent: email login failed (usually wrong app password).'
+            : n.check_email_skip_reason === 'from_rejected'
+              ? 'Check-now email not sent: sender address was rejected (set MAIL_FROM correctly).'
+              : n.check_email_skip_reason === 'host_unreachable'
+                ? 'Check-now email not sent: email server is unreachable.'
+                : n.check_email_skip_reason === 'network_unreachable'
+                  ? 'Check-now email not sent: server cannot reach the email network right now. Try again later.'
+                : n.check_email_skip_reason === 'timeout'
+                  ? 'Check-now email not sent: request timed out, please try again.'
+              : n.check_email_skip_reason === 'send_failed'
+                ? 'Check-now email not sent: delivery failed, please try again.'
             : n.check_email_skip_reason === 'no_user_email'
               ? 'Check-now email not sent: account has no email.'
               : n.check_email_skip_reason === 'no_paid_price'

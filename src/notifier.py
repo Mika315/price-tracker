@@ -7,6 +7,8 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
+import socket
+import ssl
 from email.message import EmailMessage
 
 import requests
@@ -68,6 +70,84 @@ def send_email(to_addr: str, subject: str, body: str) -> bool:
     except Exception as e:
         logger.error("[Notifier] Email failed: %s", e)
         return False
+
+
+def _email_error_code(exc: Exception) -> str:
+    msg = str(exc or "").lower()
+    if "authentication" in msg or "username and password not accepted" in msg or "5.7.8" in msg:
+        return "auth_failed"
+    if "from" in msg and ("not allowed" in msg or "sender" in msg):
+        return "from_rejected"
+    if "timed out" in msg or "timeout" in msg:
+        return "timeout"
+    if "network is unreachable" in msg or "errno 101" in msg:
+        return "network_unreachable"
+    if "name or service not known" in msg or "getaddrinfo" in msg or "nodename nor servname provided" in msg:
+        return "host_unreachable"
+    return "send_failed"
+
+
+def _connect_smtp_ipv4(host: str, port: int, timeout: int = 30) -> smtplib.SMTP:
+    """
+    Connect using IPv4 only (helps on hosts without IPv6 egress routes).
+    Returns an SMTP instance with an open connection.
+    """
+    infos = socket.getaddrinfo(host, port, family=socket.AF_INET, type=socket.SOCK_STREAM)
+    last_err: Exception | None = None
+    for _family, _socktype, _proto, _canonname, sockaddr in infos:
+        try:
+            smtp = smtplib.SMTP(timeout=timeout)
+            smtp.connect(sockaddr[0], sockaddr[1])
+            return smtp
+        except Exception as e:
+            last_err = e
+            try:
+                smtp.quit()
+            except Exception:
+                pass
+            continue
+    raise last_err or OSError("Could not connect to SMTP server.")
+
+
+def send_email_with_reason(to_addr: str, subject: str, body: str) -> tuple[bool, str | None]:
+    """Send email and return (ok, reason_code_when_failed)."""
+    if not _smtp_configured():
+        logger.warning("[Notifier] SMTP not fully configured; cannot send email to %s", to_addr)
+        return False, "smtp_not_configured"
+    if not to_addr or "@" not in to_addr:
+        logger.warning("[Notifier] Invalid recipient: %s", to_addr)
+        return False, "no_user_email"
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = MAIL_FROM
+    msg["To"] = to_addr
+    msg.set_content(body)
+
+    try:
+        if SMTP_USE_SSL:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+                smtp.login(SMTP_USER, SMTP_PASSWORD)
+                smtp.send_message(msg)
+        else:
+            smtp = _connect_smtp_ipv4(SMTP_HOST, SMTP_PORT, timeout=30)
+            try:
+                if SMTP_USE_TLS:
+                    ctx = ssl.create_default_context()
+                    smtp.starttls(context=ctx, server_hostname=SMTP_HOST)
+                smtp.login(SMTP_USER, SMTP_PASSWORD)
+                smtp.send_message(msg)
+            finally:
+                try:
+                    smtp.quit()
+                except Exception:
+                    pass
+        logger.info("[Notifier] Email sent to %s", to_addr)
+        return True, None
+    except Exception as e:
+        code = _email_error_code(e)
+        logger.error("[Notifier] Email failed (%s): %s", code, e)
+        return False, code
 
 
 def send_password_reset_email(to_addr: str, reset_url: str) -> bool:
@@ -138,10 +218,11 @@ def send_check_now_email(
         ]
 
     body = "\n".join(lines)
-    if send_email(user_email, title, body):
+    ok, reason = send_email_with_reason(user_email, title, body)
+    if ok:
         result["email_sent"] = True
     else:
-        result["email_skip_reason"] = "send_failed"
+        result["email_skip_reason"] = reason or "send_failed"
     return result
 
 
@@ -260,12 +341,27 @@ def send_price_drop_alert(
 def send_test_notification_email(to_addr: str | None) -> bool:
     """Send a test email to verify SMTP (and optionally still ping ntfy)."""
     if to_addr and _smtp_configured():
-        return send_email(
+        ok, _ = send_email_with_reason(
             to_addr,
             "Astral Hotels Price Tracker: test email",
             "Your email notifications are configured correctly.",
         )
+        return ok
     return False
+
+
+def test_notification_email_reason(to_addr: str | None) -> str | None:
+    """Return None on success, else short reason code for UI."""
+    if not to_addr:
+        return "no_user_email"
+    if not _smtp_configured():
+        return "smtp_not_configured"
+    ok, reason = send_email_with_reason(
+        to_addr,
+        "Astral Hotels Price Tracker: test email",
+        "Your email notifications are configured correctly.",
+    )
+    return None if ok else (reason or "send_failed")
 
 
 def send_test_notification(topic: str | None = None):

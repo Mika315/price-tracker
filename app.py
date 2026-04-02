@@ -33,7 +33,7 @@ from notifier import (
     send_check_now_email,
     send_price_alert,
     send_test_notification,
-    send_test_notification_email,
+    test_notification_email_reason,
 )
 from scheduler import (
     _alert_baseline,
@@ -362,8 +362,10 @@ def check_now(tid):
 
     if price is None:
         err = (
-            "Could not read a price from this Astral link for your filters. "
-            "Try adjusting meal / Stars / room options on the site, then copy the URL again."
+            "Could not read a price from this Astral link. "
+            "Make sure your link includes the correct stay dates (check-in / check-out) and guests/rooms, "
+            "then copy the full URL again from the browser address bar. "
+            "If you selected filters (meal plan / Stars / reserve duty), try turning them off and re-copying the URL."
         )
         return jsonify(
             {
@@ -480,16 +482,8 @@ def test_notification():
     smtp = get_smtp_status()
     smtp_ok = bool(smtp.get("smtp_configured"))
 
-    sent_mail = False
-    email_skip = None
-    if not email:
-        email_skip = "no_user_email"
-    elif not smtp_ok:
-        email_skip = "smtp_not_configured"
-    else:
-        sent_mail = bool(send_test_notification_email(email))
-        if not sent_mail:
-            email_skip = "send_failed"
+    email_skip = test_notification_email_reason(email)
+    sent_mail = email_skip is None
 
     send_test_notification(topic)
 
@@ -498,6 +492,38 @@ def test_notification():
             **smtp,
             "email_sent": sent_mail,
             "email_skip_reason": email_skip,
+            "email_user_message": (
+                "Great — test email sent. Check inbox and spam."
+                if sent_mail
+                else (
+                    "Email sending is not set up yet. Please connect your email sender in server settings."
+                    if email_skip == "smtp_not_configured"
+                    else (
+                        "Could not send email: login to your email provider failed. Usually this means wrong app password."
+                        if email_skip == "auth_failed"
+                        else (
+                            "Could not send email: sender address was rejected. Set MAIL_FROM to the same address as SMTP_USER."
+                            if email_skip == "from_rejected"
+                            else (
+                                "Could not send email: email server is unreachable. Check SMTP_HOST/SMTP_PORT and internet access."
+                                if email_skip == "host_unreachable"
+                                else (
+                                "Could not send email: this host cannot reach the email server network right now. Try again later or switch email provider."
+                                if email_skip == "network_unreachable"
+                                else (
+                                    "Could not send email: request timed out. Try again in a minute."
+                                    if email_skip == "timeout"
+                                    else (
+                                        "Could not send email: no account email found."
+                                        if email_skip == "no_user_email"
+                                        else "Could not send email right now. Please try again."
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            ),
             "ntfy_ping": True,
             "hint": None
             if smtp_ok
