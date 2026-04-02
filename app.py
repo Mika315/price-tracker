@@ -487,43 +487,24 @@ def test_notification():
 
     send_test_notification(topic)
 
+    msg_map = {
+        None: "Great — test email sent. Check inbox and spam.",
+        "smtp_not_configured": "Email sending is not connected yet for this app. Please try again later.",
+        "auth_failed": "Could not send email: login to the sender email failed (usually wrong app password).",
+        "from_rejected": "Could not send email: sender address was rejected. Set MAIL_FROM to the same address as SMTP_USER.",
+        "host_unreachable": "Could not send email: email server is unreachable. Check SMTP_HOST/SMTP_PORT and network access.",
+        "network_unreachable": "Could not send email: the server cannot reach the email network right now. Try again later.",
+        "timeout": "Could not send email: request timed out. Try again in a minute.",
+        "no_user_email": "Could not send email: no account email found.",
+        "send_failed": "Could not send email right now. Please try again.",
+    }
+
     return jsonify(
         {
             **smtp,
             "email_sent": sent_mail,
             "email_skip_reason": email_skip,
-            "email_user_message": (
-                "Great — test email sent. Check inbox and spam."
-                if sent_mail
-                else (
-                    "Email sending is not set up yet. Please connect your email sender in server settings."
-                    if email_skip == "smtp_not_configured"
-                    else (
-                        "Could not send email: login to your email provider failed. Usually this means wrong app password."
-                        if email_skip == "auth_failed"
-                        else (
-                            "Could not send email: sender address was rejected. Set MAIL_FROM to the same address as SMTP_USER."
-                            if email_skip == "from_rejected"
-                            else (
-                                "Could not send email: email server is unreachable. Check SMTP_HOST/SMTP_PORT and internet access."
-                                if email_skip == "host_unreachable"
-                                else (
-                                "Could not send email: this host cannot reach the email server network right now. Try again later or switch email provider."
-                                if email_skip == "network_unreachable"
-                                else (
-                                    "Could not send email: request timed out. Try again in a minute."
-                                    if email_skip == "timeout"
-                                    else (
-                                        "Could not send email: no account email found."
-                                        if email_skip == "no_user_email"
-                                        else "Could not send email right now. Please try again."
-                                    )
-                                )
-                            )
-                        )
-                    )
-                )
-            ),
+            "email_user_message": msg_map.get(email_skip, msg_map["send_failed"]),
             "ntfy_ping": True,
             "hint": None
             if smtp_ok
