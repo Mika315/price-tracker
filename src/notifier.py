@@ -18,7 +18,12 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh")
-NTFY_TOPIC = os.getenv("NTFY_TOPIC", "hotel-price-tracker")
+# Opt-in only (default disabled to avoid rate-limit spam).
+NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()
+
+# Optional HTTP email provider (recommended on hosts that block SMTP egress).
+RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
+RESEND_FROM = (os.getenv("RESEND_FROM") or "").strip()  # e.g. "Astral Tracker <onboarding@resend.dev>"
 
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
@@ -34,10 +39,49 @@ SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "60"))
 def _smtp_configured() -> bool:
     return bool(SMTP_HOST and MAIL_FROM and SMTP_USER and SMTP_PASSWORD)
 
+def _resend_configured() -> bool:
+    return bool(RESEND_API_KEY and RESEND_FROM)
+
+def _ntfy_configured() -> bool:
+    return bool((NTFY_SERVER or "").strip() and (NTFY_TOPIC or "").strip())
+
 
 def get_smtp_status() -> dict:
     """Expose for API/UI: whether outbound SMTP is configured on this server."""
-    return {"smtp_configured": _smtp_configured()}
+    return {"smtp_configured": _smtp_configured() or _resend_configured()}
+
+
+def _send_resend_email(to_addr: str, subject: str, body: str) -> tuple[bool, str | None]:
+    """
+    Send email via Resend HTTP API.
+    Returns (ok, reason_code_when_failed).
+    """
+    if not _resend_configured():
+        return False, "smtp_not_configured"
+    if not to_addr or "@" not in to_addr:
+        return False, "no_user_email"
+    try:
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "from": RESEND_FROM,
+                "to": [to_addr],
+                "subject": subject,
+                "text": body,
+            },
+            timeout=20,
+        )
+        if resp.status_code in (200, 201):
+            return True, None
+        if resp.status_code in (401, 403):
+            return False, "auth_failed"
+        if resp.status_code == 429:
+            return False, "timeout"
+        return False, "send_failed"
+    except requests.RequestException as e:
+        logger.error("[Notifier] Resend failed: %s", e)
+        return False, "timeout"
 
 
 def send_email(to_addr: str, subject: str, body: str) -> bool:
@@ -137,8 +181,12 @@ def _connect_smtp_ssl_ipv4(host: str, port: int, timeout: int = 30) -> smtplib.S
 
 def send_email_with_reason(to_addr: str, subject: str, body: str) -> tuple[bool, str | None]:
     """Send email and return (ok, reason_code_when_failed)."""
+    # Prefer Resend if configured (works when SMTP egress is blocked).
+    if _resend_configured():
+        return _send_resend_email(to_addr, subject, body)
+
     if not _smtp_configured():
-        logger.warning("[Notifier] SMTP not fully configured; cannot send email to %s", to_addr)
+        logger.warning("[Notifier] Email is not configured; cannot send email to %s", to_addr)
         return False, "smtp_not_configured"
     if not to_addr or "@" not in to_addr:
         logger.warning("[Notifier] Invalid recipient: %s", to_addr)
@@ -334,7 +382,7 @@ def send_price_alert(
     else:
         result["email_skip_reason"] = "send_failed"
 
-    if ntfy_topic:
+    if ntfy_topic and _ntfy_configured():
         _send_ntfy(title, body.replace("\n", "  "), url, topic=ntfy_topic)
 
     return result
@@ -398,6 +446,8 @@ def test_notification_email_reason(to_addr: str | None) -> str | None:
 
 def send_test_notification(topic: str | None = None):
     """Send a test ping to ntfy (legacy)."""
+    if not _ntfy_configured():
+        return
     _send_ntfy(
         title="Astral Hotels Price Tracker",
         message="Your tracker is connected and monitoring Astral booking prices.",
