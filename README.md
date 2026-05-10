@@ -14,7 +14,7 @@ A small Flask web app to monitor **Astral Hotels** booking prices (`astralhotels
 - Register / sign in / sign out.
 - **Forgot password:** request a reset link by email (requires SMTP). Link opens the app with `?reset=…` to set a new password.
 - Per-user trackers and price history (PostgreSQL in production, SQLite locally).
-- Scheduled background checks (`CHECK_INTERVAL_MINUTES`, default 30).
+- Scheduled background checks (`CHECK_INTERVAL_MINUTES`, default every morning 8 am).
 - Optional ntfy topic per tracker (legacy push).
 
 ## Technologies Used
