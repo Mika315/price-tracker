@@ -39,8 +39,10 @@ SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "60"))
 def _smtp_configured() -> bool:
     return bool(SMTP_HOST and MAIL_FROM and SMTP_USER and SMTP_PASSWORD)
 
+
 def _resend_configured() -> bool:
     return bool(RESEND_API_KEY and RESEND_FROM)
+
 
 def _ntfy_configured() -> bool:
     return bool((NTFY_SERVER or "").strip() and (NTFY_TOPIC or "").strip())
@@ -165,7 +167,7 @@ def _connect_smtp_ssl_ipv4(host: str, port: int, timeout: int = 30) -> smtplib.S
         try:
             sock = socket.create_connection(sockaddr, timeout=timeout)
             smtp_ssl = smtplib.SMTP_SSL(host=host, port=port, timeout=timeout, context=ctx)
-            # replace the socket that SMTP_SSL created with our IPv4-connected socket
+            # Use the IPv4 socket so deployments without IPv6 egress can still send mail.
             smtp_ssl.sock = ctx.wrap_socket(sock, server_hostname=host)
             smtp_ssl.file = smtp_ssl.sock.makefile("rb")
             smtp_ssl.host = host
@@ -178,6 +180,7 @@ def _connect_smtp_ssl_ipv4(host: str, port: int, timeout: int = 30) -> smtplib.S
                 pass
             continue
     raise last_err or OSError("Could not connect to SMTP SSL server.")
+
 
 def send_email_with_reason(to_addr: str, subject: str, body: str) -> tuple[bool, str | None]:
     """Send email and return (ok, reason_code_when_failed)."""

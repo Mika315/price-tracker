@@ -31,16 +31,14 @@ from database import (
 from notifier import (
     get_smtp_status,
     send_check_now_email,
-    send_price_alert,
     send_test_notification,
     test_notification_email_reason,
 )
 from scheduler import (
     _alert_baseline,
-    alert_kind_for_tracker,
-    explain_price_alert_blocker,
     build_tracking_url,
     check_all_trackers,
+    explain_price_alert_blocker,
     start_scheduler,
 )
 from scraper import scrape_price_and_packages
@@ -64,13 +62,16 @@ def _user_id() -> str | None:
     return session.get("user_id")
 
 
-_PRIVATE_USER_KEYS = frozenset({"password_hash", "password_reset_token", "password_reset_expires"})
+_PRIVATE_USER_KEYS = frozenset(
+    {"password_hash", "password_reset_token", "password_reset_expires"}
+)
 
 
-def _public_user(u: dict | None) -> dict | None:
-    if not u:
+def _public_user(user: dict | None) -> dict | None:
+    """Remove private account fields before returning user data to the client."""
+    if not user:
         return None
-    return {k: v for k, v in u.items() if k not in _PRIVATE_USER_KEYS}
+    return {k: v for k, v in user.items() if k not in _PRIVATE_USER_KEYS}
 
 
 def _request_base_url() -> str:
@@ -213,8 +214,8 @@ def auth_me():
     smtp = get_smtp_status()
     if not uid:
         return jsonify({"user": None, **smtp})
-    u = _public_user(get_user_by_id(uid))
-    return jsonify({"user": u, **smtp})
+    user = _public_user(get_user_by_id(uid))
+    return jsonify({"user": user, **smtp})
 
 
 @app.route("/api/auth/forgot-password", methods=["POST"])
@@ -377,7 +378,6 @@ def check_now(tid):
     save_price(tid, price, check_url)
 
     baseline_price, baseline_kind = _alert_baseline(tracker)
-    comparison_label = "You paid"
     threshold_pct = float(tracker.get("threshold_pct") or 0)
     drop_pct = ((baseline_price - price) / baseline_price * 100) if baseline_price > 0 else 0
     delta = (price - prev) if prev is not None else None
@@ -390,8 +390,8 @@ def check_now(tid):
     # Scheduled alerts use the alert rules.
     # Manual "Check Now" emails are for testing: send only if price changed vs what the user paid.
     blocker = explain_price_alert_blocker(tracker, baseline_price, price, prev, threshold_pct)
-    u = get_user_by_id(uid)
-    user_email = (u or {}).get("email")
+    user = get_user_by_id(uid)
+    user_email = (user or {}).get("email")
 
     smtp_status = get_smtp_status()
     paid_price = baseline_price if baseline_kind == "paid" else None
@@ -477,8 +477,8 @@ def test_notification():
     raw = request.json or {}
     topic = raw.get("topic")
     uid = _user_id()
-    u = get_user_by_id(uid) if uid else None
-    email = (u or {}).get("email")
+    user = get_user_by_id(uid) if uid else None
+    email = (user or {}).get("email")
     smtp = get_smtp_status()
     smtp_ok = bool(smtp.get("smtp_configured"))
 

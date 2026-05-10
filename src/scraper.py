@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
 import time
-import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -87,8 +88,8 @@ class RoomPackage:
 @dataclass(frozen=True)
 class SiteConnector:
     name: str
-    matcher: callable
-    extractor: callable
+    matcher: Callable[[str, str], bool]
+    extractor: Callable[[str, dict], float | None]
 
 
 def _build_single_package(price: float, req: dict, combined_text: str) -> list[dict]:
@@ -235,6 +236,7 @@ def scrape_price_and_packages(
 def scrape_price(url: str, price_selector: str | None = None) -> float | None:
     price, _ = scrape_price_and_packages(url, price_selector)
     return price
+
 
 def _has_strict_requirements(req: dict) -> bool:
     meal_plan = (req.get("meal_plan") or "none").lower()
@@ -1104,6 +1106,8 @@ def _extract_simplebooking_offer_price(text: str, req: dict) -> float | None:
                 best = chosen
 
     return best
+
+
 def _extract_contextual_price(text: str, req: dict) -> float | None:
     candidates = _extract_price_candidates_with_context(text)
     if not candidates:
@@ -1474,17 +1478,4 @@ def _pkg_to_dict(pkg: RoomPackage) -> dict:
         "free_cancel": pkg.free_cancel,
         "reserve_duty": pkg.reserve_duty,
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
 

@@ -1,6 +1,8 @@
 # Astral Hotels Price Tracker
 
-Web app to monitor **Astral Hotels** booking prices (`astralhotels.co.il` only). Users sign in, paste an Astral URL with dates, set optional “price paid” and alert rules, and receive **email alerts** when conditions are met (SMTP required on the server).
+**Status:** Ongoing Project
+
+A small Flask web app to monitor **Astral Hotels** booking prices (`astralhotels.co.il` only). Users sign in, paste an Astral URL with dates, set optional “price paid” and alert rules, and receive **email alerts** when conditions are met (SMTP required on the server).
 
 ## Scope
 
@@ -14,6 +16,16 @@ Web app to monitor **Astral Hotels** booking prices (`astralhotels.co.il` only).
 - Per-user trackers and price history (PostgreSQL in production, SQLite locally).
 - Scheduled background checks (`CHECK_INTERVAL_MINUTES`, default 30).
 - Optional ntfy topic per tracker (legacy push).
+
+## Technologies Used
+
+- Python
+- Flask
+- SQLite locally / PostgreSQL in production
+- Playwright
+- APScheduler
+- SMTP / Resend email notifications
+- GitHub Actions
 
 ## Run locally
 
